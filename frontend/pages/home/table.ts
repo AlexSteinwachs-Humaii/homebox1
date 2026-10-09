@@ -1,29 +1,25 @@
 import type { UserClient } from "~~/lib/api/user";
+import type { EntitySummary } from "~~/lib/api/types/data-contracts";
+import { useOverviewResource } from "./load";
 
-export function itemsTable(api: UserClient) {
-  const { data: items, refresh } = useAsyncData(
-    "items",
-    async () => {
-      const { data } = await api.items.getAll({
-        page: 1,
-        pageSize: 5,
-        orderBy: "createdAt",
-      });
-      return data.items;
-    },
-    {
-      deep: true,
-    }
-  );
-
-  onServerEvent(ServerEvent.EntityMutation, () => {
-    console.log("entity mutation");
-    refresh();
+async function loadRecentItems(api: UserClient) {
+  const result = await api.items.getAll({
+    page: 1,
+    pageSize: 5,
+    orderBy: "createdAt",
   });
+  if (result.error || !Array.isArray(result.data?.items)) {
+    return { ok: false as const };
+  }
+  return { ok: true as const, data: result.data.items as EntitySummary[] };
+}
 
-  return computed(() => {
-    return {
-      items: items.value || [],
-    };
-  });
+export function itemsTable() {
+  const recent = useOverviewResource("items", loadRecentItems, { entity: true });
+
+  return {
+    items: computed(() => (recent.status.value === "ready" ? (recent.data.value ?? []) : [])),
+    status: recent.status,
+    refresh: recent.refresh,
+  };
 }

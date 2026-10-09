@@ -329,16 +329,27 @@ test("an empty collection does not invent overview records", async ({ page }) =>
 
   const overview = page.locator("[data-overview='purrfect']");
   await expect(overview).toBeVisible();
+  await expect(overview.getByTestId("purrfect-stats")).toHaveAttribute("data-state", "ready");
+  await expect(overview.getByTestId("items-state")).toHaveAttribute("data-state", "empty");
+  await expect(overview.getByTestId("locations-state")).toHaveAttribute("data-state", "empty");
   await expect(overview.locator("[data-inventory-card='item']")).toHaveCount(0);
   await expect(overview.locator("[data-inventory-card='location']")).toHaveCount(0);
   await expect(overview.getByTestId("recent-item")).toHaveCount(0);
+  await expect(overview.locator("[data-stat='items'] dd")).toHaveText("0");
+  await expect(overview.locator("[data-stat='locations'] dd")).toHaveText("0");
+  await expect(overview.locator("[data-stat='tags'] dd")).toHaveText("0");
+  await expect(overview.locator("[data-stat='value']")).toContainText("0");
   await expect(overview).not.toContainText("Cat carrier");
   await expect(overview).not.toContainText("Kitchen");
   await expect(overview).not.toContainText("$8,420");
+  await expect(overview).not.toContainText("8420");
   await expect(overview.getByTestId("browse-locations")).toHaveAttribute("href", "/locations");
   await expect(overview.getByTestId("browse-locations")).toContainText("All locations");
   await expect(overview.getByTestId("browse-items")).toHaveAttribute("href", "/items");
   await expect(overview.getByRole("heading", { name: "A few belongings" })).toBeVisible();
+  await expect(page.getByTestId("purrfect-search")).toBeVisible();
+  await expect(page.getByTestId("purrfect-scan")).toBeEnabled();
+  await expect(page.getByTestId("purrfect-add-item")).toBeEnabled();
 });
 
 test("other themes keep the existing home overview", async ({ page }) => {
@@ -362,4 +373,297 @@ test("other themes keep the existing home overview", async ({ page }) => {
   await expect(page.locator("[data-overview='classic']")).toBeVisible();
   await expect(page.getByText("Quick Statistics")).toBeVisible();
   await expect(page.locator("[data-overview='purrfect']")).toHaveCount(0);
+});
+
+function statisticsBody(totalItems: number, totalLocations = 6, totalTags = 9, totalItemPrice = 321.5) {
+  return JSON.stringify({
+    totalItemPrice,
+    totalItems,
+    totalLocations,
+    totalTags,
+    totalUsers: 1,
+    totalWithWarranty: 0,
+  });
+}
+
+test("failed statistics are not shown as zeros and can be retried", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let allowStatistics = false;
+
+  await page.route("**/groups/statistics", async route => {
+    if (route.request().method() !== "GET" || route.request().url().includes("/statistics/")) {
+      await route.continue();
+      return;
+    }
+    if (!allowStatistics) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "statistics unavailable" }),
+      });
+      return;
+    }
+    await fulfillJson(route, statisticsBody(17));
+  });
+
+  await login(page);
+  await choosePurrfect(page);
+  await page.goto("/home");
+
+  const overview = page.locator("[data-overview='purrfect']");
+  const stats = overview.getByTestId("purrfect-stats");
+  await expect(stats).toHaveAttribute("data-state", "error");
+  await expect(stats.getByTestId("stats-state")).toHaveAttribute("data-state", "error");
+  await expect(stats.locator("[data-stat]")).toHaveCount(0);
+  await expect(stats).not.toContainText("128");
+  await expect(stats).not.toContainText("$8,420");
+  await expect(stats).not.toContainText("8420");
+  await expect(overview.getByTestId("browse-items")).toBeEnabled();
+  await expect(overview.getByTestId("browse-locations")).toHaveAttribute("href", "/locations");
+  await expect(page.getByTestId("purrfect-search")).toBeVisible();
+  await expect(page.getByTestId("purrfect-scan")).toBeEnabled();
+  await expect(page.getByTestId("purrfect-add-item")).toBeEnabled();
+
+  allowStatistics = true;
+  await stats.getByTestId("stats-retry").click();
+  await expect(stats).toHaveAttribute("data-state", "ready");
+  await expect(stats.locator("[data-stat='items'] dd")).toHaveText("17");
+  await expect(stats.locator("[data-stat='locations'] dd")).toHaveText("6");
+  await expect(stats.locator("[data-stat='value']")).toContainText("321");
+});
+
+test("a failed recent-item list can be retried without hiding entry points", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let allowItems = false;
+
+  await page.route(/\/api\/v1\/entities(\?|$)/, async route => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("orderBy") !== "createdAt") {
+      await route.continue();
+      return;
+    }
+    if (!allowItems) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "items unavailable" }),
+      });
+      return;
+    }
+    await fulfillJson(route, listBody(RECENT));
+  });
+  await page.route("**/groups/statistics", async route => {
+    if (route.request().method() !== "GET" || route.request().url().includes("/statistics/")) {
+      await route.continue();
+      return;
+    }
+    await fulfillJson(route, statisticsBody(17));
+  });
+
+  await login(page);
+  await choosePurrfect(page);
+  await page.goto("/home");
+
+  const overview = page.locator("[data-overview='purrfect']");
+  await expect(overview.getByTestId("items-state")).toHaveAttribute("data-state", "error");
+  await expect(overview.locator("[data-inventory-card='item']")).toHaveCount(0);
+  await expect(overview.getByTestId("recent-item")).toHaveCount(0);
+  await expect(overview).not.toContainText("Zebra lamp");
+  await expect(overview.getByTestId("browse-items")).toHaveAttribute("href", "/items");
+  await expect(overview.getByTestId("browse-locations")).toBeVisible();
+  await expect(page.getByTestId("purrfect-add-item")).toBeEnabled();
+
+  allowItems = true;
+  await overview.getByTestId("items-retry").click();
+  await expect(overview.getByTestId("items-state")).toHaveAttribute("data-state", "ready");
+  await expect(overview.locator("[data-inventory-card='item']").first()).toContainText("Zebra lamp");
+  await expect(overview.getByTestId("recent-item").first()).toContainText("Zebra lamp");
+});
+
+test("a failed location list can be retried and does not look empty", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let allowLocations = false;
+
+  await page.route(/\/api\/v1\/entities(\?|$)/, async route => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("isLocation") !== "true" || url.searchParams.get("filterChildren") !== "true") {
+      await route.continue();
+      return;
+    }
+    if (!allowLocations) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "locations unavailable" }),
+      });
+      return;
+    }
+    await fulfillJson(route, listBody(ROOTS));
+  });
+
+  await login(page);
+  await choosePurrfect(page);
+  await page.goto("/home");
+
+  const spaces = page.getByTestId("explore-spaces");
+  await expect(spaces.getByTestId("locations-state")).toHaveAttribute("data-state", "error");
+  await expect(spaces.locator("[data-inventory-card='location']")).toHaveCount(0);
+  await expect(spaces).not.toContainText("No Locations Found");
+  await expect(spaces.getByTestId("browse-locations")).toHaveAttribute("href", "/locations");
+  await expect(page.getByTestId("purrfect-search")).toBeVisible();
+
+  allowLocations = true;
+  await spaces.getByTestId("locations-retry").click();
+  await expect(spaces.getByTestId("locations-state")).toHaveAttribute("data-state", "ready");
+  await expect(spaces.locator("[data-inventory-card='location']")).toHaveCount(2);
+  await expect(spaces.getByTestId("location-link").first()).toHaveAttribute("href", `/location/${KITCHEN}`);
+});
+
+test("switching collections shows the selected collection and ignores a late previous response", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  await login(page);
+  const created = await page.evaluate(async () => {
+    const name = `Overview Collection B ${Date.now()}`;
+    const response = await fetch("/api/v1/groups", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const body = (await response.json().catch(() => null)) as { id?: string; name?: string } | null;
+    return { ok: response.ok, status: response.status, id: body?.id ?? "", name: body?.name || name };
+  });
+  expect(created.ok, `create collection failed: ${created.status}`).toBe(true);
+  const collectionB = created.id;
+  const collectionBName = created.name || "Overview Collection B";
+
+  const pendingA: Array<() => void> = [];
+  let releaseLateA = false;
+
+  await page.route("**/groups/statistics", async route => {
+    if (route.request().method() !== "GET" || route.request().url().includes("/statistics/")) {
+      await route.continue();
+      return;
+    }
+    const tenant = route.request().headers()["x-tenant"] ?? "";
+    if (tenant === collectionB) {
+      await fulfillJson(route, statisticsBody(2, 1, 1, 5));
+      return;
+    }
+    if (!releaseLateA) {
+      await new Promise<void>(resolve => pendingA.push(resolve));
+    }
+    await fulfillJson(route, statisticsBody(17, 6, 9, 321.5));
+  });
+  await page.route(/\/api\/v1\/entities(\?|$)/, async route => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const url = new URL(route.request().url());
+    const tenant = route.request().headers()["x-tenant"] ?? "";
+    if (
+      tenant === collectionB &&
+      (url.searchParams.get("orderBy") === "createdAt" || url.searchParams.get("isLocation") === "true")
+    ) {
+      await fulfillJson(route, listBody([]));
+      return;
+    }
+    if (url.searchParams.get("orderBy") === "createdAt") {
+      await fulfillJson(route, listBody(RECENT));
+      return;
+    }
+    if (url.searchParams.get("isLocation") === "true" && url.searchParams.get("filterChildren") === "true") {
+      await fulfillJson(route, listBody(ROOTS));
+      return;
+    }
+    await route.continue();
+  });
+
+  await choosePurrfect(page);
+  await page.goto("/home");
+  releaseLateA = true;
+  pendingA.splice(0).forEach(release => release());
+  const overview = page.locator("[data-overview='purrfect']");
+  await expect(overview.locator("[data-stat='items'] dd")).toHaveText("17");
+
+  releaseLateA = false;
+  await page.getByRole("combobox", { name: "Select Collection" }).click();
+  await page.getByRole("option", { name: collectionBName }).click();
+  await expect(page.getByTestId("overview-kicker")).toContainText(collectionBName);
+  await expect(overview.locator("[data-stat='items'] dd")).toHaveText("2");
+  await expect(overview.locator("[data-inventory-card='item']")).toHaveCount(0);
+  await expect(overview).not.toContainText("Zebra lamp");
+
+  releaseLateA = true;
+  pendingA.splice(0).forEach(release => release());
+  await page.waitForTimeout(500);
+  await expect(overview.locator("[data-stat='items'] dd")).toHaveText("2");
+  await expect(overview.getByTestId("overview-kicker")).toContainText(collectionBName);
+  await expect(overview.getByTestId("browse-items")).toHaveAttribute("href", "/items");
+  await expect(page.getByTestId("purrfect-add-item")).toBeEnabled();
+});
+
+test("an inventory mutation refreshes overview counts and the recent subset", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let mutated = false;
+
+  await page.route(/\/api\/v1\/entities(\?|$)/, async route => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("orderBy") !== "createdAt") {
+      await route.continue();
+      return;
+    }
+    const items = mutated
+      ? [item("mutant00-0000-4000-8000-000000000001", "Mutation marker lamp", KITCHEN, "Kitchen", 1, 3, []), ...RECENT]
+      : RECENT;
+    await fulfillJson(route, listBody(items.slice(0, 5)));
+  });
+  await page.route("**/groups/statistics", async route => {
+    if (route.request().method() !== "GET" || route.request().url().includes("/statistics/")) {
+      await route.continue();
+      return;
+    }
+    await fulfillJson(route, statisticsBody(mutated ? 18 : 17));
+  });
+
+  await login(page);
+  await choosePurrfect(page);
+  await page.goto("/home");
+  const overview = page.locator("[data-overview='purrfect']");
+  await expect(overview.locator("[data-stat='items'] dd")).toHaveText("17");
+  await expect(overview.getByTestId("recent-item").first()).toContainText("Zebra lamp");
+
+  mutated = true;
+  const created = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/entities", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Mutation marker lamp", quantity: 1 }),
+    });
+    return response.ok;
+  });
+  expect(created).toBe(true);
+  await expect(overview.locator("[data-stat='items'] dd")).toHaveText("18");
+  await expect(overview.getByTestId("recent-item").first()).toContainText("Mutation marker lamp");
+  await expect(overview.locator("[data-inventory-card='item']").first()).toContainText("Mutation marker lamp");
 });
