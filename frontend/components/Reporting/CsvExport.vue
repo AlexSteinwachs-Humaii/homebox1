@@ -16,24 +16,39 @@
   import {
     defaultReportingColumns,
     reportingColumns,
-    reportingCsv,
     reportingExportUnavailable,
     selectedReportingColumns,
     type ReportingColumnId,
   } from "@/lib/reporting/csv";
 
-  const props = defineProps<{ items: EntitySummary[]; loading: boolean }>();
+  import { captureReportingView, reportingViewIsCurrent, downloadReportingCsv } from "@/lib/reporting/export";
+
+  const props = defineProps<{
+    items: EntitySummary[];
+    loading: boolean;
+    collectionId: string | null | undefined;
+  }>();
   const { t } = useI18n();
   const { openDialog, closeDialog } = useDialog();
   const selected = ref<ReportingColumnId[]>([]);
   const preferences = useViewPreferences();
   const unavailable = computed(() => reportingExportUnavailable(props.loading, props.items.length));
-  const canDownload = computed(() => !unavailable.value && selectedReportingColumns(selected.value).length > 0);
+  const snapshot = ref<string>();
+  const currentView = () => ({
+    items: props.items,
+    loading: props.loading,
+    collectionId: props.collectionId,
+    activeCollectionId: preferences.value.collectionId ?? null,
+  });
+  const canDownload = computed(
+    () => reportingViewIsCurrent(snapshot.value, currentView()) && selectedReportingColumns(selected.value).length > 0
+  );
   const hintId = useId();
   const selectionHintId = useId();
 
   function open() {
-    if (unavailable.value) return;
+    snapshot.value = captureReportingView(currentView());
+    if (!snapshot.value) return;
     const headers = preferences.value.tableHeaders;
     selected.value = headers
       ? selectedReportingColumns(headers.filter(header => header.enabled).map(header => header.value)).map(
@@ -48,28 +63,24 @@
   }
 
   // A refresh must not leave an export interaction referring to an old result set.
-  watch([() => props.items, () => props.loading], () => closeDialog(DialogID.ReportingCsvExport));
+  watch(
+    currentView,
+    () => {
+      snapshot.value = undefined;
+      closeDialog(DialogID.ReportingCsvExport);
+    },
+    { deep: true, flush: "sync" }
+  );
 
   function download() {
+    // Recheck synchronously: never rely on a queued watcher to protect collection boundaries.
     if (!canDownload.value) return;
-    let url: string | undefined;
     try {
-      const csv = reportingCsv(props.items, selected.value, t);
-      url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "homebox-recently-added.csv";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      downloadReportingCsv(props.items, selected.value, t);
       closeDialog(DialogID.ReportingCsvExport);
     } catch {
+      // Keep the selector and selection open so Download is the retry path.
       toast.error(t("home.csv.failed"));
-    } finally {
-      if (url) {
-        const objectUrl = url;
-        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      }
     }
   }
 </script>

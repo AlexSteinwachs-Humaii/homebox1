@@ -36,8 +36,9 @@
     externalPagination?: Pagination;
   }>();
 
-  defineEmits<{
+  const emit = defineEmits<{
     (e: "refresh"): void;
+    (e: "visible-records", records: EntitySummary[]): void;
   }>();
 
   const preferences = useViewPreferences();
@@ -123,6 +124,13 @@
     },
   });
 
+  // Export consumers need the final displayed page, after sorting and pagination.
+  watch(
+    () => table.getRowModel().rows.map(row => row.original),
+    records => emit("visible-records", records),
+    { immediate: true, flush: "sync" }
+  );
+
   const persistHeaders = () => {
     const headers = table
       .getAllColumns()
@@ -204,13 +212,17 @@
                   :model-value="table.getColumn(colId)?.getIsVisible()"
                   @update:model-value="toggleHeader(colId)"
                 />
-                <label class="text-sm" :for="colId"> {{ $t(`items.${camelToSnakeCase(colId)}`) }} </label>
+                <label class="text-sm" :for="colId">
+                  {{ $t(`items.${camelToSnakeCase(colId)}`) }}
+                </label>
               </div>
             </div>
           </div>
 
           <div class="flex flex-col gap-2">
-            <Label> {{ $t("components.item.view.table.rows_per_page") }} </Label>
+            <Label>
+              {{ $t("components.item.view.table.rows_per_page") }}
+            </Label>
             <Select :model-value="pagination.pageSize" @update:model-value="val => table.setPageSize(Number(val))">
               <SelectTrigger>
                 <SelectValue />
@@ -225,7 +237,9 @@
           </div>
 
           <div class="flex flex-col gap-2">
-            <Label class="text-sm"> {{ $t("components.item.view.table.quick_actions") }} </Label>
+            <Label class="text-sm">
+              {{ $t("components.item.view.table.quick_actions") }}
+            </Label>
             <Switch v-model="preferences.quickActions.enabled" />
           </div>
         </div>

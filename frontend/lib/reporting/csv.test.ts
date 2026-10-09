@@ -68,6 +68,15 @@ describe("reporting column selection", () => {
     expect(selection).toEqual(["name", "location"]);
   });
 
+  it.each(["=SUM(1,2)", "+1+1", "-1+1", "@SUM(A1)", "  =1", "\tplain", "\rplain", "\nplain", "＝1"])(
+    "neutralizes spreadsheet text %j without altering numeric values",
+    name => {
+      expect(reportingCsv([{ ...record, name, purchasePrice: -12 }], ["name", "purchasePrice"], label)).toContain(
+        `"'${name}","-12"`
+      );
+    }
+  );
+
   it("writes missing fields as empty cells and quotes text safely", () => {
     const item = { ...record, name: 'Drill, "big"\n工具', parent: undefined };
     expect(reportingCsv([item], ["name", "location"], label)).toContain('"Drill, ""big""\n工具",""');

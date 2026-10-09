@@ -13,6 +13,7 @@
   import TagChip from "~/components/Tag/Chip.vue";
   import Table from "~/components/Item/View/Table.vue";
   import CsvExport from "~/components/Reporting/CsvExport.vue";
+  import type { EntitySummary } from "~/lib/api/types/data-contracts";
 
   const { t } = useI18n();
 
@@ -32,14 +33,16 @@
   const tagsStore = useTagStore();
   const tags = computed(() => tagsStore.tags);
 
-  const itemTable = itemsTable(api);
+  const itemTable = itemsTable();
+  const displayedRecords = ref<EntitySummary[]>([]);
+  const exportRecords = computed(() => (breakpoints.lg ? displayedRecords.value : itemTable.value.items));
   const stats = statCardData(api);
 </script>
 
 <template>
   <div>
     <BaseContainer class="flex flex-col gap-4">
-      <CsvExport :items="itemTable.items" :loading="itemTable.loading" />
+      <CsvExport :items="exportRecords" :loading="itemTable.loading" :collection-id="itemTable.collectionId" />
       <section>
         <Subtitle> {{ $t("home.quick_statistics") }} </Subtitle>
         <div class="grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-6">
@@ -54,7 +57,7 @@
           {{ $t("items.no_results") }}
         </p>
         <BaseCard v-else-if="breakpoints.lg">
-          <Table :items="itemTable.items" />
+          <Table :items="itemTable.items" @visible-records="displayedRecords = $event" />
         </BaseCard>
         <div v-else class="grid grid-cols-1 gap-4 md:grid-cols-2">
           <ItemCard v-for="item in itemTable.items" :key="item.id" :item="item" />

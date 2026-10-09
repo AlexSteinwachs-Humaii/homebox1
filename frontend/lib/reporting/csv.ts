@@ -62,7 +62,7 @@ export function reportingExportUnavailable(loading: boolean, count: number) {
 
 function csvCell(value: unknown): string {
   let text = value == null ? "" : value instanceof Date ? value.toISOString() : String(value);
-  if (typeof value === "string" && /^[\s]*[=+\-@]/.test(text)) text = "'" + text;
+  if (typeof value === "string" && (/^\s*[=+\-@＝＋－＠]/.test(text) || /^[\t\r\n]/.test(text))) text = "'" + text;
   return `"${text.replaceAll('"', '""')}"`;
 }
 

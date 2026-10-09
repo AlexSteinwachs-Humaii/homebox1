@@ -1,6 +1,6 @@
-import type { UserClient } from "~~/lib/api/user";
-
-export function itemsTable(api: UserClient) {
+export function itemsTable() {
+  const preferences = useViewPreferences();
+  const collectionId = computed(() => preferences.value.collectionId ?? null);
   const {
     data: items,
     refresh,
@@ -8,15 +8,17 @@ export function itemsTable(api: UserClient) {
   } = useAsyncData(
     "items",
     async () => {
-      const { data } = await api.items.getAll({
+      const requestCollectionId = collectionId.value;
+      const { data } = await useUserApi().items.getAll({
         page: 1,
         pageSize: 5,
         orderBy: "createdAt",
       });
-      return data.items;
+      return { items: data.items, collectionId: requestCollectionId };
     },
     {
       deep: true,
+      watch: [collectionId],
     }
   );
 
@@ -27,8 +29,10 @@ export function itemsTable(api: UserClient) {
 
   return computed(() => {
     return {
-      items: items.value || [],
-      loading: status.value === "idle" || status.value === "pending",
+      items: items.value?.collectionId === collectionId.value ? items.value.items : [],
+      collectionId: items.value?.collectionId,
+      loading:
+        status.value === "idle" || status.value === "pending" || items.value?.collectionId !== collectionId.value,
     };
   });
 }
