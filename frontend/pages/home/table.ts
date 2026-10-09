@@ -1,7 +1,11 @@
 import type { UserClient } from "~~/lib/api/user";
 
 export function itemsTable(api: UserClient) {
-  const { data: items, refresh } = useAsyncData(
+  const {
+    data: items,
+    refresh,
+    status,
+  } = useAsyncData(
     "items",
     async () => {
       const { data } = await api.items.getAll({
@@ -24,6 +28,7 @@ export function itemsTable(api: UserClient) {
   return computed(() => {
     return {
       items: items.value || [],
+      loading: status.value === "idle" || status.value === "pending",
     };
   });
 }
