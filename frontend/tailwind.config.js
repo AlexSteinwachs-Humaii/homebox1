@@ -20,6 +20,7 @@ export default {
     "theme-lofi",
     "theme-luxury",
     "theme-pastel",
+    "theme-purrfect-home",
     "theme-retro",
     "theme-synthwave",
     "theme-valentine",

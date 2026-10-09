@@ -951,6 +951,46 @@
 
     --radius: 0.5rem;
   }
+
+  /*
+   * Purrfect Home is optional. Tokens apply only under this class or data-theme,
+   * so Homebox (:root), Light and Dark keep their own variables.
+   * Borders and muted text are darker than the artboard so fields, tags and
+   * errors stay at least 4.5:1 for text and 3:1 for control boundaries.
+   */
+  .theme-purrfect-home,
+  [data-theme="purrfect-home"] {
+    --background: 36 56% 96%;
+    --background-accent: 34 38% 90%;
+    --foreground: 264 22% 18%;
+    --primary: 174 65% 22%;
+    --primary-foreground: 36 56% 96%;
+    --secondary: 264 32% 90%;
+    --secondary-foreground: 264 22% 18%;
+    --accent: 266 46% 91%;
+    --accent-foreground: 264 22% 18%;
+    --muted: 34 32% 92%;
+    --muted-foreground: 262 13% 37%;
+    --card: 0 0% 100%;
+    --card-foreground: 264 22% 18%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 264 22% 18%;
+    --destructive: 0 56% 39%;
+    --destructive-foreground: 36 56% 96%;
+    --input: 32 12% 48%;
+    --border: 32 12% 48%;
+    --ring: 174 65% 22%;
+    --sidebar-background: 264 42% 91%;
+    --sidebar-foreground: 264 22% 18%;
+    --sidebar-primary: 174 65% 22%;
+    --sidebar-primary-foreground: 36 56% 96%;
+    --sidebar-accent: 262 42% 86%;
+    --sidebar-accent-foreground: 264 22% 18%;
+    --sidebar-border: 264 22% 55%;
+    --sidebar-ring: 174 65% 22%;
+
+    --radius: 1rem;
+  }
 }
 
 @layer base {
@@ -962,6 +1002,29 @@
     width: 100%;
     overflow-x: hidden;
   }
+}
+
+/*
+ * Unlayered so these beat Tailwind's disabled:opacity-50 and focus-visible:outline-none
+ * only while Purrfect Home is the page theme. 0.85 keeps disabled controls distinct
+ * without dropping label contrast below 4.5:1. Placeholders stay opaque so muted text holds.
+ */
+html.theme-purrfect-home :where(button, input, textarea, select, [role="button"], [role="radio"], [role="checkbox"], a):disabled,
+html.theme-purrfect-home :where([aria-disabled="true"]),
+html[data-theme="purrfect-home"] :where(button, input, textarea, select, [role="button"], [role="radio"], [role="checkbox"], a):disabled,
+html[data-theme="purrfect-home"] :where([aria-disabled="true"]) {
+  opacity: 0.85;
+}
+
+html.theme-purrfect-home :where(a, button, input, textarea, select, summary, [role="button"], [role="radio"], [role="checkbox"], [tabindex]):focus-visible,
+html[data-theme="purrfect-home"] :where(a, button, input, textarea, select, summary, [role="button"], [role="radio"], [role="checkbox"], [tabindex]):focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+html.theme-purrfect-home :where(input, textarea)::placeholder,
+html[data-theme="purrfect-home"] :where(input, textarea)::placeholder {
+  opacity: 1;
 }
 
 .text-no-transform {
