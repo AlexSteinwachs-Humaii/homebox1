@@ -90,3 +90,63 @@ test("Purrfect Home can be chosen, kept, and switched back", async ({ page }) =>
   await expect.poll(() => cssVariable(page, "--sidebar-background")).toBe("0 0% 90%");
   await expect.poll(() => savedThemes.at(-1)).toBe("homebox");
 });
+
+test("Purrfect desktop shell keeps navigation, search, scan and add item", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await login(page);
+
+  await expect(page.locator("[data-shell='purrfect']")).toHaveCount(0);
+  await expect(page.getByPlaceholder("Search")).toBeVisible();
+
+  await page.goto("/profile");
+  await page.locator("[data-set-theme='purrfect-home']").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "purrfect-home");
+
+  await page.goto("/home");
+  const shell = page.locator("[data-shell='purrfect']");
+  await expect(shell).toBeVisible();
+  await expect(shell.getByRole("link", { name: "HomeBox" })).toBeVisible();
+  await expect(shell.getByRole("combobox")).toBeVisible();
+
+  for (const name of ["Home", "Search", "Locations", "Tags", "Templates", "Maintenance", "Collection"]) {
+    await expect(shell.getByRole("link", { name, exact: true })).toBeVisible();
+  }
+  await expect(shell.getByRole("link", { name: "Home", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(shell.getByRole("link", { name: "Profile", exact: true })).toBeVisible();
+  await expect(shell.getByTestId("logout-button")).toBeVisible();
+
+  await shell.getByRole("button", { name: "Collection sections" }).click();
+  await expect(shell.getByRole("link", { name: "Members" })).toBeVisible();
+  await expect(shell.getByRole("link", { name: "Tools" })).toBeVisible();
+
+  const search = shell.getByRole("searchbox");
+  await search.focus();
+  await expect(search).toBeFocused();
+  await search.fill("cat & carrier");
+  await search.press("Enter");
+  await expect(page).toHaveURL(/\/items\?q=/);
+  const searched = new URL(page.url());
+  expect(searched.pathname).toBe("/items");
+  expect(searched.searchParams.get("q")).toBe("cat & carrier");
+  expect(searched.searchParams.get("collectionId")).toBeNull();
+
+  await page.goto("/home");
+  await page.getByTestId("purrfect-add-item").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("purrfect-scan").focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByText("Camera permission denied").or(page.getByRole("heading", { name: "Scanner" }))
+  ).toBeVisible();
+
+  await page.setViewportSize({ width: 800, height: 900 });
+  await expect(page.locator("[data-shell='purrfect']")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Home", exact: true }).first()).toBeVisible();
+  await expect(page.getByPlaceholder("Search")).toBeVisible();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.locator("[data-shell='purrfect']")).toBeVisible();
+});

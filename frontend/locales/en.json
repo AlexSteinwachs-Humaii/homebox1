@@ -767,14 +767,18 @@
         "total_entries": "Total Entries"
     },
     "menu": {
+        "add_item": "Add item",
         "collection": "Collection",
+        "collection_sections": "Collection sections",
         "create_item": "Item / Asset",
         "create_location": "Location",
         "create_tag": "Tag",
         "home": "Home",
         "locations": "Locations",
         "maintenance": "Maintenance",
+        "manage": "Manage",
         "profile": "Profile",
+        "scan": "Scan",
         "scanner": "Scanner",
         "search": "Search",
         "templates": "Templates"
@@ -784,6 +788,10 @@
             "no_templates": "No templates yet.",
             "title": "Templates"
         }
+    },
+    "purrfect": {
+        "search_placeholder": "Search belongings in {collection}",
+        "search_placeholder_generic": "Search belongings"
     },
     "profile": {
         "active": "Active",
