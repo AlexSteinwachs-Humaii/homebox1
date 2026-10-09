@@ -790,15 +790,30 @@
         }
     },
     "purrfect": {
+        "a_few_belongings": "A few belongings",
+        "all_locations": "All locations",
+        "all_locations_count": "All {count, plural, one {# location} other {# locations}}",
+        "browse_all_items": "Browse all items",
         "decorative_cat": "Illustration of a cat",
+        "explore_spaces": "Explore your spaces",
+        "hero_body": "Keep favorite things easy to find—from the travel carrier to the stand mixer. Same home, a little more personality.",
+        "hero_title_line_1": "A happy home.",
+        "hero_title_line_2": "For you and your cat.",
         "location_items": "{count, plural, one {# item} other {# items}}",
         "location_path": "Location",
         "no_photo": "No photo of {name}",
         "no_photo_label": "No photo",
         "no_photo_unnamed": "No photo",
+        "optional_theme": "Purrfect Home · Optional theme",
+        "overview": "Overview",
         "qty": "Qty {count}",
+        "recently_added": "Recently added",
         "search_placeholder": "Search belongings in {collection}",
-        "search_placeholder_generic": "Search belongings"
+        "search_placeholder_generic": "Search belongings",
+        "stat_items": "Items",
+        "stat_locations": "Locations",
+        "stat_tags": "Tags",
+        "stat_value": "Total value"
     },
     "profile": {
         "active": "Active",
