@@ -87,6 +87,15 @@
           </template>
         </p>
       </div>
+      <NuxtLink
+        v-if="showViewItem"
+        :to="`/item/${item.id}`"
+        class="relative z-10 mt-1 flex items-center justify-between text-sm font-semibold text-primary"
+        data-testid="view-item"
+      >
+        <span>{{ $t("purrfect.view_item") }}</span>
+        <MdiArrowRight class="size-4" aria-hidden="true" />
+      </NuxtLink>
     </div>
   </Card>
   <Card v-else class="relative overflow-hidden" data-inventory-card="item">
@@ -163,6 +172,7 @@
   import type { EntityOut, EntitySummary } from "~~/lib/api/types/data-contracts";
   import MdiShieldCheck from "~icons/mdi/shield-check";
   import MdiArchive from "~icons/mdi/archive";
+  import MdiArrowRight from "~icons/mdi/arrow-right";
   import { Badge } from "@/components/ui/badge";
   import { Card } from "@/components/ui/card";
   import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -200,7 +210,9 @@
     },
   });
 
+  const route = useRoute();
   const purrfect = computed(() => theme.value === "purrfect-home");
+  const showViewItem = computed(() => purrfect.value && route.path === "/items");
   const pathSeparator = LOCATION_PATH_SEPARATOR;
   const objectContain = computed(() => !preferences.value.legacyImageFit);
 

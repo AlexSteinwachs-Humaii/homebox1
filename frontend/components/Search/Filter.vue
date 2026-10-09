@@ -1,9 +1,17 @@
 <template>
   <Popover>
     <PopoverTrigger as-child>
-      <Button size="sm" variant="outline" class="group/filter">
-        {{ label }} {{ len }}
-        <MdiChevronDown class="transition-transform group-data-[state=open]/filter:rotate-180" />
+      <Button
+        size="sm"
+        :variant="highlightActive && selected.length > 0 ? 'default' : 'outline'"
+        class="group/filter"
+        :class="triggerClass"
+        :data-active="selected.length > 0 ? 'true' : 'false'"
+        :data-testid="testId || undefined"
+        type="button"
+      >
+        {{ label }}<span v-if="len"> {{ len }}</span>
+        <MdiChevronDown aria-hidden="true" class="transition-transform group-data-[state=open]/filter:rotate-180" />
       </Button>
     </PopoverTrigger>
     <PopoverContent class="z-40 p-0">
@@ -51,6 +59,9 @@
 
   type Props = {
     label?: string;
+    triggerClass?: string;
+    highlightActive?: boolean;
+    testId?: string;
     options: {
       name: string;
       id: string;
@@ -69,6 +80,9 @@
   const emit = defineEmits(["update:modelValue"]);
   const props = withDefaults(defineProps<Props>(), {
     label: "",
+    triggerClass: "",
+    highlightActive: false,
+    testId: "",
     modelValue: () => [],
   });
 

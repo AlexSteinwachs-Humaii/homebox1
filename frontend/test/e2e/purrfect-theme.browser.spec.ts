@@ -244,7 +244,7 @@ test("Purrfect cards keep real metadata and honest image fallbacks", async ({ pa
   await expect(zero.getByTestId("location-link")).toBeFocused();
 
   await page.goto("/items");
-  await page.getByRole("button", { name: "Card", exact: true }).click();
+  await page.getByRole("button", { name: "Cards", exact: true }).click();
   await expect(page.getByRole("button", { name: "Table", exact: true })).toBeVisible();
 
   const cards = page.locator("[data-inventory-card='item']");
@@ -281,6 +281,6 @@ test("Purrfect cards keep real metadata and honest image fallbacks", async ({ pa
 
   await page.getByRole("button", { name: "Table", exact: true }).click();
   await expect(page.getByRole("table")).toBeVisible();
-  await page.getByRole("button", { name: "Card", exact: true }).click();
+  await page.getByRole("button", { name: "Cards", exact: true }).click();
   await expect(cards.first()).toBeVisible();
 });

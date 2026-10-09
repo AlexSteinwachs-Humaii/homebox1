@@ -8,7 +8,9 @@
   import MdiLoading from "~icons/mdi/loading";
   import MdiMagnify from "~icons/mdi/magnify";
   import MdiDelete from "~icons/mdi/delete";
-  import { Button } from "@/components/ui/button";
+  import { Button, ButtonGroup } from "@/components/ui/button";
+  import { PURRFECT_DESKTOP_MEDIA_QUERY } from "~~/lib/inventory-context";
+  import { searchPresentation } from "~~/lib/search-presentation";
   import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
   import { Label } from "@/components/ui/label";
   import { Switch } from "@/components/ui/switch";
@@ -93,6 +95,10 @@
 
   const preferences = useViewPreferences();
   const pageSize = computed(() => preferences.value.itemsPerTablePage);
+  const { theme } = useTheme();
+  const isDesktop = useMediaQuery(PURRFECT_DESKTOP_MEDIA_QUERY);
+  const { selectedCollection } = useCollections();
+  const purrfectDesktop = computed(() => theme.value === "purrfect-home" && isDesktop.value);
 
   const route = useRoute();
   const router = useRouter();
@@ -178,6 +184,39 @@
 
   const fieldTuples = ref<[string, string][]>([]);
   const fieldValuesCache = ref<Record<string, string[]>>({});
+
+  const presentation = computed(() =>
+    searchPresentation({
+      apiTotal: total.value,
+      pageLength: items.value.length,
+      query: query.value || "",
+      byAssetId: byAssetId.value,
+      assetIdLabel: String(parsedAssetId.value ?? ""),
+      collectionName: selectedCollection.value?.name ?? "",
+      locationFilterCount: selectedLocations.value.length,
+      tagFilterCount: selectedTags.value.length,
+      includeArchived: includeArchived.value,
+      onlyWithPhoto: onlyWithPhoto.value,
+      onlyWithoutPhoto: onlyWithoutPhoto.value,
+      fieldFilterCount: fieldTuples.value.filter(tuple => tuple[0] && tuple[1]).length,
+      negateTags: negateTags.value,
+    })
+  );
+
+  const collectionLabel = computed(() => presentation.value.collectionName || t("purrfect.search_collection_fallback"));
+  const optionsActive = computed(
+    () =>
+      includeArchived.value ||
+      fieldSelector.value ||
+      negateTags.value ||
+      onlyWithoutPhoto.value ||
+      onlyWithPhoto.value ||
+      orderBy.value !== "name"
+  );
+
+  function setItemView(view: "card" | "table") {
+    preferences.value.itemDisplayView = view;
+  }
 
   const { data: allFields } = useAsyncData(async () => {
     const { data, error } = await api.items.fields.getAll();
@@ -388,27 +427,97 @@
 
 <template>
   <BaseContainer>
+    <div v-if="purrfectDesktop" data-testid="purrfect-search-results" class="mb-2">
+      <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <span>{{ collectionLabel }}</span>
+        <span aria-hidden="true"> / </span>
+        {{ $t("purrfect.search_crumb") }}
+      </p>
+      <h1
+        class="mt-2 text-4xl font-semibold tracking-tight text-foreground"
+        data-testid="search-heading"
+        :data-count="presentation.count"
+        :data-mode="presentation.mode"
+        :data-state="loading ? 'loading' : 'ready'"
+      >
+        <template v-if="loading && items.length === 0">
+          {{ $t("purrfect.search_loading") }}
+        </template>
+        <template v-else-if="presentation.mode === 'asset'">
+          {{ $t("purrfect.search_asset_heading", { count: presentation.count, id: presentation.assetIdLabel }) }}
+        </template>
+        <template v-else-if="presentation.mode === 'match'">
+          {{ $t("purrfect.search_match_heading", { count: presentation.count, query: presentation.query }) }}
+        </template>
+        <template v-else>
+          {{ $t("purrfect.search_browse_heading", { count: presentation.count }) }}
+        </template>
+      </h1>
+      <p class="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground" data-testid="search-behavior">
+        <template v-if="presentation.mode === 'asset'">
+          {{ $t("purrfect.search_behavior_asset", { id: presentation.assetIdLabel, collection: collectionLabel }) }}
+        </template>
+        <template v-else-if="presentation.filtersApplied">
+          {{ $t("purrfect.search_behavior_filtered", { collection: collectionLabel }) }}
+        </template>
+        <template v-else-if="presentation.mode === 'browse'">
+          {{ $t("purrfect.search_behavior_browse", { collection: collectionLabel }) }}
+        </template>
+        <template v-else>
+          {{ $t("purrfect.search_behavior", { collection: collectionLabel }) }}
+        </template>
+      </p>
+    </div>
+
     <div v-if="locations && tags">
-      <div class="flex flex-wrap items-end gap-4 md:flex-nowrap">
+      <div v-if="!purrfectDesktop" class="flex flex-wrap items-end gap-4 md:flex-nowrap">
         <div class="w-full">
-          <Input v-model:model-value="query" :placeholder="$t('global.search')" class="h-12" />
+          <Input
+            v-model:model-value="query"
+            data-testid="items-search"
+            :placeholder="$t('global.search')"
+            class="h-12"
+          />
           <div v-if="byAssetId" class="pl-2 pt-2 text-sm">
             <p>{{ $t("items.query_id", { id: parsedAssetId }) }}</p>
           </div>
         </div>
-        <Button class="mb-auto h-12 w-full md:w-auto" @click.prevent="submit">
+        <Button class="mb-auto h-12 w-full md:w-auto" type="button" @click.prevent="submit">
           <MdiLoading v-if="loading" class="animate-spin" />
           <MdiMagnify v-else />
           {{ $t("global.search") }}
         </Button>
       </div>
 
-      <div class="flex w-full flex-wrap gap-2 py-2 md:flex-nowrap">
-        <SearchFilter v-model="selectedLocations" :label="$t('global.locations')" :options="locationFlatTree" />
-        <SearchFilter v-model="selectedTags" :label="$t('global.tags')" :options="tags" />
+      <div class="flex w-full flex-wrap items-center gap-2 py-2 md:flex-nowrap">
+        <SearchFilter
+          v-model="selectedLocations"
+          :label="$t('global.locations')"
+          :options="locationFlatTree"
+          :trigger-class="purrfectDesktop ? 'h-9 rounded-full px-4' : ''"
+          :highlight-active="purrfectDesktop"
+          test-id="search-locations"
+        />
+        <SearchFilter
+          v-model="selectedTags"
+          :label="$t('global.tags')"
+          :options="tags"
+          :trigger-class="purrfectDesktop ? 'h-9 rounded-full px-4' : ''"
+          :highlight-active="purrfectDesktop"
+          test-id="search-tags"
+        />
         <Popover>
           <PopoverTrigger as-child>
-            <Button size="sm" variant="outline"> {{ $t("items.options") }}</Button>
+            <Button
+              size="sm"
+              :variant="optionsActive ? 'default' : 'outline'"
+              type="button"
+              data-testid="search-options"
+              :data-active="optionsActive ? 'true' : 'false'"
+              :class="purrfectDesktop ? 'h-9 rounded-full px-4' : undefined"
+            >
+              {{ $t("items.options") }}
+            </Button>
           </PopoverTrigger>
           <PopoverContent class="z-40 flex flex-col gap-2">
             <Label class="flex cursor-pointer items-center">
@@ -457,7 +566,27 @@
           </PopoverContent>
         </Popover>
         <div class="grow" />
-        <Popover>
+        <ButtonGroup v-if="purrfectDesktop" data-testid="view-toggle" class="rounded-full">
+          <Button
+            size="sm"
+            type="button"
+            :variant="preferences.itemDisplayView === 'card' ? 'default' : 'outline'"
+            :aria-pressed="preferences.itemDisplayView === 'card'"
+            @click="setItemView('card')"
+          >
+            {{ $t("purrfect.cards") }}
+          </Button>
+          <Button
+            size="sm"
+            type="button"
+            :variant="preferences.itemDisplayView === 'table' ? 'default' : 'outline'"
+            :aria-pressed="preferences.itemDisplayView === 'table'"
+            @click="setItemView('table')"
+          >
+            {{ $t("purrfect.table") }}
+          </Button>
+        </ButtonGroup>
+        <Popover v-if="!purrfectDesktop">
           <PopoverTrigger as-child>
             <Button size="sm" variant="outline"> {{ $t("items.tips") }}</Button>
           </PopoverTrigger>
@@ -514,14 +643,26 @@
       </div>
     </div>
 
-    <section>
+    <div
+      v-if="purrfectDesktop"
+      id="selectable-subtitle"
+      class="mb-3 flex items-center gap-2"
+      :class="{ hidden: !preferences.quickActions.enabled }"
+    />
+
+    <section :data-item-view="preferences.itemDisplayView">
       <ItemViewSelectable
         :items="items"
         :location-flat-tree="locationFlatTree"
         :pagination="pagination"
+        :hide-header="purrfectDesktop"
         disable-sort
         @refresh="async () => search()"
       />
     </section>
+
+    <p v-if="purrfectDesktop && !loading" class="mt-4 text-sm text-muted-foreground" data-testid="search-showing">
+      {{ $t("purrfect.search_showing", { shown: items.length, total: presentation.count }) }}
+    </p>
   </BaseContainer>
 </template>
