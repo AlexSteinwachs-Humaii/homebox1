@@ -32,6 +32,8 @@ export type SearchPresentationInput = {
   onlyWithoutPhoto: boolean;
   fieldFilterCount: number;
   negateTags: boolean;
+  /** Non-default sort. Omitted callers are treated as the default name order. */
+  ordered?: boolean;
 };
 
 export type SearchPresentation = {
@@ -52,7 +54,8 @@ export function searchFiltersApplied(input: SearchPresentationInput): boolean {
     input.onlyWithPhoto ||
     input.onlyWithoutPhoto ||
     input.fieldFilterCount > 0 ||
-    input.negateTags
+    input.negateTags ||
+    input.ordered === true
   );
 }
 

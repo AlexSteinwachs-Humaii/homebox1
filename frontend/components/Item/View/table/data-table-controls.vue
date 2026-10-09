@@ -67,6 +67,7 @@
           <template v-for="(item, index) in pageItems">
             <PaginationListItem v-if="item.type === 'page'" :key="index" :value="item.value" as-child>
               <Button
+                type="button"
                 class="size-10 p-0"
                 :variant="item.value === page ? 'default' : 'outline'"
                 @click="() => setPage(item.value)"

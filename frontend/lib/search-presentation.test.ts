@@ -64,6 +64,7 @@ describe("search presentation", () => {
     expect(searchPresentation({ ...base, onlyWithoutPhoto: true }).filtersApplied).toBe(true);
     expect(searchPresentation({ ...base, fieldFilterCount: 1 }).filtersApplied).toBe(true);
     expect(searchPresentation({ ...base, negateTags: true }).filtersApplied).toBe(true);
+    expect(searchPresentation({ ...base, ordered: true }).filtersApplied).toBe(true);
     expect(searchPresentation(base).filtersApplied).toBe(false);
   });
 });

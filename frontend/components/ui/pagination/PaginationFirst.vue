@@ -6,10 +6,12 @@ import {
 import { ChevronsLeft } from 'lucide-vue-next'
 import { PaginationFirst, type PaginationFirstProps } from 'reka-ui'
 import { computed, type HTMLAttributes } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = withDefaults(defineProps<PaginationFirstProps & { class?: HTMLAttributes['class'] }>(), {
   asChild: true,
 })
+const { t } = useI18n()
 
 const delegatedProps = computed(() => {
   const { class: _, ...delegated } = props
@@ -20,7 +22,7 @@ const delegatedProps = computed(() => {
 
 <template>
   <PaginationFirst v-bind="delegatedProps">
-    <Button :class="cn('w-10 h-10 p-0', props.class)" variant="outline">
+    <Button type="button" :aria-label="t('items.first')" :class="cn('w-10 h-10 p-0', props.class)" variant="outline">
       <slot>
         <ChevronsLeft class="h-4 w-4" />
       </slot>

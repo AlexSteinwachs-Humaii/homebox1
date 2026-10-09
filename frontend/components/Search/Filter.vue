@@ -7,6 +7,7 @@
         class="group/filter"
         :class="triggerClass"
         :data-active="selected.length > 0 ? 'true' : 'false'"
+        :aria-pressed="selected.length > 0"
         :data-testid="testId || undefined"
         type="button"
       >
