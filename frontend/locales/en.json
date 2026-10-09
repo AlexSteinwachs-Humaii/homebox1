@@ -790,6 +790,13 @@
         }
     },
     "purrfect": {
+        "decorative_cat": "Illustration of a cat",
+        "location_items": "{count, plural, one {# item} other {# items}}",
+        "location_path": "Location",
+        "no_photo": "No photo of {name}",
+        "no_photo_label": "No photo",
+        "no_photo_unnamed": "No photo",
+        "qty": "Qty {count}",
         "search_placeholder": "Search belongings in {collection}",
         "search_placeholder_generic": "Search belongings"
     },

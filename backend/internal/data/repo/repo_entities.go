@@ -174,8 +174,10 @@ type (
 		// Sale details
 		SoldDate types.Date `json:"soldDate"`
 
-		// Container-specific (populated when querying locations)
-		ItemCount float64 `json:"itemCount,omitempty"`
+		// ItemCount is set only after a location query has computed it.
+		// A pointer keeps a real zero in JSON and omits a count that was never
+		// loaded, so clients do not paint "not loaded" as zero.
+		ItemCount *float64 `json:"itemCount,omitempty"`
 	}
 
 	EntityOut struct {
@@ -793,9 +795,13 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 			recordSpanError(childSpan, cErr)
 		} else {
 			for i := range entities {
+				value := 0.0
 				if c, ok := counts[entities[i].ID]; ok {
-					entities[i].ItemCount = c
+					value = c
 				}
+				// Copy per location. A missing row means no child items, which is zero,
+				// not an unknown count. A failed count query leaves the pointer nil.
+				entities[i].ItemCount = float64Ptr(value)
 			}
 		}
 		childSpan.End()
@@ -812,6 +818,10 @@ func (r *EntityRepository) QueryByGroup(ctx context.Context, gid uuid.UUID, q En
 		Total:    count,
 		Items:    entities,
 	}, nil
+}
+
+func float64Ptr(v float64) *float64 {
+	return &v
 }
 
 // getChildItemCounts returns a map of entity ID → sum of child item quantities for the given location IDs.
