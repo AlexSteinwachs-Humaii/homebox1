@@ -5,16 +5,15 @@
  * own API data. They are not authorization, and this module never switches
  * the active collection or follows a caller-supplied return URL.
  *
- * Enhancement six switches only the Purrfect Home launcher onto `/item/add`
- * by setting `PURRFECT_CONTEXTUAL_ADD_PATH`. Until that route exists, every
- * theme keeps the existing item creation dialog.
+ * Purrfect Home opens `/item/add`. Other themes keep the existing dialog.
+ * The path is a constant, not a caller-supplied URL.
  */
 
 export const PURRFECT_DESKTOP_MIN_WIDTH_PX = 1024;
 export const PURRFECT_DESKTOP_MEDIA_QUERY = `(min-width: ${PURRFECT_DESKTOP_MIN_WIDTH_PX}px)`;
 
-/** Null until enhancement six supplies the Purrfect contextual add page. */
-export const PURRFECT_CONTEXTUAL_ADD_PATH: "/item/add" | null = null;
+/** Purrfect Home add-item page. Other themes ignore this and keep the dialog. */
+export const PURRFECT_CONTEXTUAL_ADD_PATH: "/item/add" | null = "/item/add";
 
 export const INVENTORY_CONTEXT_QUERY_KEYS = {
   collectionId: "collectionId",

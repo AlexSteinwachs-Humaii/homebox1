@@ -150,8 +150,14 @@ describe("search and add item launch", () => {
     expect(inventoryDestinationHref({ kind: "items", query: "nest" })).toBe("/items?q=nest");
   });
 
-  it("keeps add item on the existing dialog until the purrfect page exists", () => {
-    expect(PURRFECT_CONTEXTUAL_ADD_PATH).toBeNull();
+  it("sends purrfect home to the add page and keeps other themes on the dialog", () => {
+    expect(PURRFECT_CONTEXTUAL_ADD_PATH).toBe("/item/add");
+    expect(
+      resolveAddItemLaunch({
+        theme: "purrfect-home",
+        currentCollectionId: COLLECTION,
+      }).mode
+    ).toBe("page");
     expect(
       resolveAddItemLaunch({
         theme: "purrfect-home",

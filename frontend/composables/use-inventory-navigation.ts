@@ -20,9 +20,9 @@ type LaunchContext = InventoryContext | string | URLSearchParams | Record<string
 
 /**
  * Shared launcher for search and Add item.
- * Global Add item opens the existing creation dialog. Setting
- * `PURRFECT_CONTEXTUAL_ADD_PATH` in inventory-context.ts is the only switch
- * that sends Purrfect Home to `/item/add`; other themes stay on the dialog.
+ * Purrfect Home opens `/item/add`. Other themes keep the existing dialog.
+ * `PURRFECT_CONTEXTUAL_ADD_PATH` is the only switch, and it is not a URL
+ * the caller can replace.
  */
 export function useInventoryNavigation() {
   const route = useRoute();

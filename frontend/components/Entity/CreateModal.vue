@@ -240,7 +240,6 @@
   import { Button, ButtonGroup } from "~/components/ui/button";
   import BaseModal from "@/components/App/CreateModal.vue";
   import type {
-    EntityCreate,
     EntityTemplateOut,
     EntityTemplateSummary,
     EntityOut,
@@ -250,6 +249,7 @@
   import { useLocationStore } from "~~/stores/locations";
   import { activeCollectionId } from "~~/composables/use-collections";
   import { explicitCreateLocationId } from "~~/lib/inventory-context";
+  import { LAST_TEMPLATE_STORAGE_KEY, buildCreateRequest, templateApplyFields } from "~~/lib/entity-create";
   import { notifyContextualItemCreated } from "~~/lib/contextual-create";
   import MdiBarcode from "~icons/mdi/barcode";
   import MdiBarcodeScan from "~icons/mdi/barcode-scan";
@@ -361,22 +361,19 @@
           description: data.description,
         } as EntityTemplateSummary;
         templateData.value = data;
-        form.quantity = data.defaultQuantity;
-        if (data.defaultName) form.name = data.defaultName;
-        if (data.defaultDescription) form.description = data.defaultDescription;
-        if (data.defaultLocation && !pinnedLocationId.value) {
-          const found = locations.value.find(l => l.id === data.defaultLocation!.id);
+        const applied = templateApplyFields(data, { keepLocation: Boolean(pinnedLocationId.value) });
+        if (applied.quantity != null) form.quantity = applied.quantity;
+        if (applied.name) form.name = applied.name;
+        if (applied.description) form.description = applied.description;
+        if (applied.locationId) {
+          const found = locations.value.find(l => l.id === applied.locationId);
           if (found) form.location = found;
         }
-        if (data.defaultTags && data.defaultTags.length > 0) {
-          form.tags = data.defaultTags.map(l => l.id);
-        }
+        if (applied.tagIds) form.tags = applied.tagIds;
         toast.success(t("components.template.toast.applied", { name: data.name }));
       }
     }
   }
-
-  const LAST_TEMPLATE_KEY = "homebox:lastUsedTemplate";
 
   const loading = ref(false);
   const focused = ref(false);
@@ -427,7 +424,7 @@
       templateData.value = null;
       templateUserSelected.value = false;
       form.quantity = 1;
-      localStorage.removeItem(LAST_TEMPLATE_KEY);
+      localStorage.removeItem(LAST_TEMPLATE_STORAGE_KEY);
       return;
     }
 
@@ -443,42 +440,33 @@
     // Store template data for display and item creation
     templateData.value = data;
 
-    // Pre-fill form with template defaults
-    form.quantity = data.defaultQuantity;
-    if (data.defaultName) {
-      form.name = data.defaultName;
+    const selectedApplied = templateApplyFields(data, {
+      keepLocation: Boolean(pinnedLocationId.value) || Boolean(form.location?.id),
+    });
+    if (selectedApplied.quantity != null) form.quantity = selectedApplied.quantity;
+    if (selectedApplied.name) form.name = selectedApplied.name;
+    if (selectedApplied.description) form.description = selectedApplied.description;
+    if (selectedApplied.locationId) {
+      const found = locations.value.find(l => l.id === selectedApplied.locationId);
+      if (found) form.location = found;
     }
-    if (data.defaultDescription) {
-      form.description = data.defaultDescription;
-    }
-    // Pre-fill location if template has one and current form doesn't.
-    // An explicit filing place wins over a template default.
-    if (data.defaultLocation && !form.location?.id && !pinnedLocationId.value) {
-      const found = locations.value.find(l => l.id === data.defaultLocation!.id);
-      if (found) {
-        form.location = found;
-      }
-    }
-    // Pre-fill tags from template
-    if (data.defaultTags && data.defaultTags.length > 0) {
-      form.tags = data.defaultTags.map(l => l.id);
-    }
+    if (selectedApplied.tagIds) form.tags = selectedApplied.tagIds;
 
     // Save template ID to localStorage for persistence
-    localStorage.setItem(LAST_TEMPLATE_KEY, template.id);
+    localStorage.setItem(LAST_TEMPLATE_STORAGE_KEY, template.id);
 
     toast.success(t("components.template.toast.applied", { name: data.name }));
   }
 
   async function restoreLastTemplate() {
-    const lastTemplateId = localStorage.getItem(LAST_TEMPLATE_KEY);
+    const lastTemplateId = localStorage.getItem(LAST_TEMPLATE_STORAGE_KEY);
     if (!lastTemplateId) return;
 
     // Load the template details
     const { data, error } = await api.templates.get(lastTemplateId);
     if (error || !data) {
       // Template might have been deleted, clear the stored ID
-      localStorage.removeItem(LAST_TEMPLATE_KEY);
+      localStorage.removeItem(LAST_TEMPLATE_STORAGE_KEY);
       return;
     }
 
@@ -487,24 +475,15 @@
     selectedTemplate.value = { id: data.id, name: data.name, description: data.description } as EntityTemplateSummary;
     templateData.value = data;
     templateUserSelected.value = true;
-    form.quantity = data.defaultQuantity;
-    if (data.defaultName) {
-      form.name = data.defaultName;
+    const restored = templateApplyFields(data, { keepLocation: Boolean(pinnedLocationId.value) });
+    if (restored.quantity != null) form.quantity = restored.quantity;
+    if (restored.name) form.name = restored.name;
+    if (restored.description) form.description = restored.description;
+    if (restored.locationId) {
+      const found = locations.value.find(l => l.id === restored.locationId);
+      if (found) form.location = found;
     }
-    if (data.defaultDescription) {
-      form.description = data.defaultDescription;
-    }
-    // Pre-fill location if template has one. A contextual destination stays put.
-    if (data.defaultLocation && !pinnedLocationId.value) {
-      const found = locations.value.find(l => l.id === data.defaultLocation!.id);
-      if (found) {
-        form.location = found;
-      }
-    }
-    // Pre-fill tags from template
-    if (data.defaultTags && data.defaultTags.length > 0) {
-      form.tags = data.defaultTags.map(l => l.id);
-    }
+    if (restored.tagIds) form.tags = restored.tagIds;
   }
 
   function clearTemplate() {
@@ -513,7 +492,7 @@
     templateUserSelected.value = false;
     showTemplateDetails.value = false;
     form.quantity = 1;
-    localStorage.removeItem(LAST_TEMPLATE_KEY);
+    localStorage.removeItem(LAST_TEMPLATE_STORAGE_KEY);
   }
 
   watch(
@@ -691,34 +670,34 @@
       });
       error = result.error;
       data = result.data;
-    } else if (templateData.value) {
-      // If a template is selected, use the template creation endpoint
-      const templateRequest = {
-        name: form.name,
-        description: form.description,
-        parentId: form.location.id as string,
-        tagIds: form.tags,
-        quantity: form.quantity,
-        entityTypeId: selectedEntityType.value?.id || "",
-      };
-
-      const result = await api.templates.createItem(templateData.value.id, templateRequest);
-      error = result.error;
-      data = result.data;
     } else {
-      // Normal item creation without template
-      const out: EntityCreate = {
-        parentId: form.parentId || (form.location.id as string),
+      const request = buildCreateRequest({
         name: form.name,
-        quantity: form.quantity,
         description: form.description,
+        quantity: form.quantity,
+        tagIds: form.tags,
+        locationId: form.parentId || form.location?.id || "",
+        entityTypeId: selectedEntityType.value?.id || "",
         manufacturer: form.manufacturer,
         modelNumber: form.modelNumber,
-        tagIds: form.tags,
-        entityTypeId: selectedEntityType.value?.id || "",
-      };
-
-      const result = await api.items.create(out);
+        parentId: form.parentId || undefined,
+        templateId: templateData.value?.id,
+      });
+      if (!request.ok) {
+        loading.value = false;
+        toast.error(
+          request.reason === "missing-location"
+            ? t("components.entity.create_modal.toast.please_select_location")
+            : t("components.entity.create_modal.toast.create_failed", {
+                type: t(selectedEntityType.value ? selectedEntityType.value.name : "global.entity"),
+              })
+        );
+        return;
+      }
+      const result =
+        request.kind === "template"
+          ? await api.templates.createItem(request.templateId, request.body)
+          : await api.items.create(request.body);
       error = result.error;
       data = result.data;
     }

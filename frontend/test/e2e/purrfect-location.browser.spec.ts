@@ -643,7 +643,7 @@ async function openAddHere(page: Page) {
 }
 
 async function closeCreate(page: Page) {
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("purrfect-add-cancel").click();
   await expect(page.getByTestId("create-entity-form")).toHaveCount(0);
 }
 
@@ -791,8 +791,8 @@ test("contextual create stays on the location and refreshes its list", async ({ 
   const before = queries.length;
   const form = await openAddHere(page);
   await expect(form).toHaveAttribute("data-destination-id", LOFT);
-  await form.locator("input").first().fill("Loose mat");
-  await form.getByRole("button", { name: "Create", exact: true }).click();
+  await form.getByTestId("add-item-name").locator("input").fill("Loose mat");
+  await form.getByRole("button", { name: "Save item" }).click();
   await expect(page.getByTestId("create-entity-form")).toHaveCount(0, { timeout: 20_000 });
   await expect(page).toHaveURL(new RegExp(`/location/${LOFT}`));
   await expect(page).not.toHaveURL(/\/item\//);

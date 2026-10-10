@@ -135,8 +135,9 @@ test("Purrfect desktop shell keeps navigation, search, scan and add item", async
   await page.goto("/home");
   await page.getByTestId("purrfect-add-item").focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/\/item\/add/);
+  await expect(page.getByTestId("create-entity-form")).toBeVisible();
+  await page.goBack();
 
   await page.getByTestId("purrfect-scan").focus();
   await page.keyboard.press("Enter");
