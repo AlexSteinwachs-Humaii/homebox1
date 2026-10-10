@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { classifySourcePath, resolveLocationSource } from "./location-source";
+import type { LocationRef } from "./location-browse";
 import {
   PURRFECT_CONTEXTUAL_ADD_PATH,
   acceptInventoryNavigation,
@@ -385,5 +387,71 @@ describe("item location handoff", () => {
     expect(kept.replacementHref).toBeNull();
     expect(kept.context.sourceItemId).toBe(SOURCE);
     expect(kept.context.collectionId).toBe(COLLECTION);
+  });
+});
+
+describe("location page consumes the item handoff", () => {
+  const refs: LocationRef[] = [
+    { id: ROOT, name: "Utility room", parentId: null },
+    { id: BRANCH, name: "Pet supplies", parentId: ROOT },
+    { id: DESTINATION, name: "Top shelf", parentId: BRANCH },
+  ];
+
+  it("selects the handed branch and keeps the deeper destination without writing inventory", () => {
+    const handoff = deriveItemLocationHandoff({
+      itemId: SOURCE,
+      collectionId: COLLECTION,
+      currentCollectionId: COLLECTION,
+      locationIds: new Set([ROOT, BRANCH, DESTINATION]),
+      location: { id: DESTINATION, name: "Top shelf" },
+      path: [
+        { id: ROOT, name: "Utility room", type: "location" },
+        { id: BRANCH, name: "Pet supplies", type: "location" },
+        { id: DESTINATION, name: "Top shelf", type: "location" },
+        { id: NESTED, name: "Travel box", type: "location" },
+        { id: SOURCE, name: "Cat carrier", type: "location" },
+      ],
+    });
+    const classified = classifySourcePath(
+      [
+        { id: ROOT, name: "Utility room", type: "location" },
+        { id: BRANCH, name: "Pet supplies", type: "location" },
+        { id: DESTINATION, name: "Top shelf", type: "location" },
+        { id: NESTED, name: "Travel box", type: "location" },
+        { id: SOURCE, name: "Cat carrier", type: "location" },
+      ],
+      SOURCE,
+      refs
+    );
+
+    const resolved = resolveLocationSource({
+      routeLocationId: ROOT,
+      currentCollectionId: COLLECTION,
+      hint: handoff.context,
+      locations: refs,
+      probe: {
+        status: "found",
+        record: {
+          id: SOURCE,
+          name: "Cat carrier",
+          parentId: classified.directParentId,
+          quantity: 1,
+          purchasePrice: 68,
+          tags: [],
+          imageId: null,
+          thumbnailId: null,
+        },
+        locationIds: classified.locationIds,
+        nearestLocationId: classified.nearestLocationId,
+        anchors: classified.anchors,
+      },
+    });
+
+    expect(handoff.href).toContain(`/location/${ROOT}`);
+    expect(resolved.branchId).toBe(BRANCH);
+    expect(resolved.destinationId).toBe(DESTINATION);
+    expect(resolved.sourceItemId).toBe(SOURCE);
+    expect(resolved.dropKeys).toEqual([]);
+    expect(classified.anchors.map(anchor => anchor.id)).toEqual([NESTED]);
   });
 });

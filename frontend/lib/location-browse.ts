@@ -521,14 +521,20 @@ const PLACE_SEPARATOR = " · ";
  * Group by the location path under the selected place. Item containers stay in
  * the row label; they do not become shelves.
  */
-export function groupBelongings(items: BrowseRecord[], locations: LocationRef[], scopeId: string): ShelfGroup[] {
-  const nodes = buildNodes(locations, items);
+export function groupBelongings(
+  items: BrowseRecord[],
+  locations: LocationRef[],
+  scopeId: string,
+  anchors: BrowseRecord[] = []
+): ShelfGroup[] {
+  const chained = anchors.length > 0 ? [...anchors, ...items] : items;
+  const nodes = buildNodes(locations, chained);
   const scope = nodes.get(scopeId);
   const scopeIds = new Set(subtreeLocationIds(scopeId, locations));
   const groups = new Map<string, ShelfGroup>();
 
   for (const item of items) {
-    const located = containingLocationId(item.id, locations, items);
+    const located = containingLocationId(item.id, locations, chained);
     if (located && !scopeIds.has(located)) {
       continue;
     }

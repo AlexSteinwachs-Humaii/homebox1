@@ -820,6 +820,7 @@
         "place_more": "More about this place",
         "place_no_extra": "No notes, photos, or files are stored on this place.",
         "place_open": "Open",
+        "place_opened": "Opened",
         "place_part_of": "part of the {count, plural, one {# location} other {# locations}} in {collection}",
         "place_partial": "Showing {shown} records so far. This is not the total, and shelf groups stay hidden until every page is loaded.",
         "place_places_inside": "{count, plural, one {# place inside} other {# places inside}}",

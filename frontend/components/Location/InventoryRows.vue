@@ -10,7 +10,13 @@
     complete: boolean;
     groups: ShelfGroup[];
     partialItems: BrowseRecord[];
+    /** Transient Opened mark. Not keyboard focus and not a saved selection. */
+    openedItemId?: string | null;
   }>();
+
+  function isOpened(id: string): boolean {
+    return Boolean(props.openedItemId) && props.openedItemId?.toLowerCase() === id.toLowerCase();
+  }
 
   function asTag(tag: { id: string; name: string }): TagSummary {
     return {
@@ -54,8 +60,10 @@
           v-for="item in group.items"
           :key="item.id"
           class="flex items-center gap-4 border-b border-border/70 px-4 py-3 last:border-b-0"
+          :class="isOpened(item.id) ? 'bg-accent/50' : ''"
           data-testid="location-item-row"
           :data-item-id="item.id"
+          :data-opened="isOpened(item.id) ? 'true' : 'false'"
         >
           <EntityImage
             class="size-12 shrink-0 rounded-xl [&_[data-image-fallback]_span]:sr-only [&_svg]:size-5"
@@ -66,13 +74,22 @@
             fit="cover"
           />
           <div class="min-w-0 flex-1">
-            <NuxtLink
-              :to="`/item/${item.id}`"
-              class="break-words font-semibold text-foreground hover:underline"
-              data-testid="location-item-link"
-            >
-              {{ item.name }}
-            </NuxtLink>
+            <div class="flex flex-wrap items-center gap-2">
+              <NuxtLink
+                :to="`/item/${item.id}`"
+                class="break-words font-semibold text-foreground hover:underline"
+                data-testid="location-item-link"
+              >
+                {{ item.name }}
+              </NuxtLink>
+              <span
+                v-if="isOpened(item.id)"
+                class="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground"
+                data-testid="location-item-opened"
+              >
+                {{ $t("purrfect.place_opened") }}
+              </span>
+            </div>
             <p v-if="item.placeLabel || item.quantity != null" class="mt-0.5 text-xs text-muted-foreground">
               <span v-if="item.placeLabel" data-testid="location-item-place">{{ item.placeLabel }}</span>
               <template v-if="item.quantity != null">

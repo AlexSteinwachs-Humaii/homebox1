@@ -26,6 +26,17 @@
     type LocationRef,
     type LocationWalk,
   } from "~~/lib/location-browse";
+  import { acceptInventoryNavigation, emptyInventoryContext, type InventoryContext } from "~~/lib/inventory-context";
+  import {
+    canonicalLocationId,
+    classifySourcePath,
+    locationInScope,
+    nearestVerifiedLocation,
+    resolveLocationSource,
+    shouldApplySourceProbe,
+    withRevealedSource,
+    type SourceProbe,
+  } from "~~/lib/location-source";
   import { useInventoryNavigation } from "~~/composables/use-inventory-navigation";
   import MdiPlus from "~icons/mdi/plus";
   import MdiPackageVariant from "~icons/mdi/package-variant";
@@ -46,13 +57,16 @@
   }>();
 
   const { t } = useI18n();
+  const route = useRoute();
   const confirm = useConfirm();
   const { launchAddItem } = useInventoryNavigation();
   const preferences = useViewPreferences();
 
   type Phase = "loading" | "partial" | "ready" | "empty" | "error";
 
-  const selectedChildId = ref<string | null>(null);
+  /** undefined follows the validated hint. null is an explicit whole-room choice. */
+  const userBranch = ref<string | null | undefined>(undefined);
+  const sourceProbe = ref<SourceProbe>({ status: "absent" });
   const indexStatus = ref<"loading" | "ready" | "error">("loading");
   const locationIndex = ref<LocationRef[]>([]);
   const collectionLocationCount = ref<number | null>(null);
@@ -64,12 +78,53 @@
   let roomToken = 0;
   let childToken = 0;
   let indexToken = 0;
+  let sourceToken = 0;
 
   const places = computed(() =>
     directLocationChildren(props.location.id, locationIndex.value, props.location.children ?? [])
   );
   const childIds = computed(() => places.value.map(place => place.id));
-  const activeChild = computed(() => activePlaceId(selectedChildId.value, childIds.value));
+  const hint = computed<InventoryContext>(() => {
+    const accepted = acceptInventoryNavigation(route.fullPath, {
+      currentCollectionId: props.collectionId,
+    });
+    return accepted.ok ? accepted.navigation.context : emptyInventoryContext();
+  });
+  const resolvedSource = computed(() =>
+    resolveLocationSource({
+      routeLocationId: props.location.id,
+      currentCollectionId: props.collectionId,
+      hint: hint.value,
+      locations: locationIndex.value,
+      probe: indexStatus.value === "ready" ? sourceProbe.value : { status: "pending" },
+    })
+  );
+  const activeChild = computed(() =>
+    activePlaceId(userBranch.value === undefined ? resolvedSource.value.branchId : userBranch.value, childIds.value)
+  );
+  const highlightedSourceId = computed(() => {
+    if (sourceProbe.value.status !== "found" || !resolvedSource.value.sourceItemId) {
+      return null;
+    }
+    const nearest = sourceProbe.value.nearestLocationId;
+    const scope = activeChild.value ?? props.location.id;
+    return locationInScope(nearest, scope, locationIndex.value) ? resolvedSource.value.sourceItemId : null;
+  });
+  const revealedRecord = computed(() =>
+    highlightedSourceId.value && sourceProbe.value.status === "found" ? sourceProbe.value.record : null
+  );
+  const sourceAnchors = computed(() =>
+    highlightedSourceId.value && sourceProbe.value.status === "found" ? sourceProbe.value.anchors : []
+  );
+  const visibleDestinationId = computed(() => {
+    const destination = resolvedSource.value.destinationId;
+    if (!destination) {
+      return null;
+    }
+    return locationInScope(destination, activeChild.value ?? props.location.id, locationIndex.value)
+      ? destination
+      : null;
+  });
   const ancestors = computed(() => ancestorLocations(props.location.id, locationIndex.value));
   const displayWalk = computed(() => (activeChild.value ? childWalk.value : roomWalk.value));
   const displayPhase = computed(() => (activeChild.value ? childPhase.value : roomPhase.value));
@@ -82,11 +137,17 @@
     }
     return childRecordCounts(roomWalk.value.loaded, places.value, locationIndex.value);
   });
+  const displayItems = computed(() => withRevealedSource(displayWalk.value.loaded, revealedRecord.value));
   const displayGroups = computed(() => {
     if (!walkIsComplete(displayWalk.value)) {
       return [];
     }
-    return groupBelongings(displayWalk.value.loaded, locationIndex.value, activeChild.value ?? props.location.id);
+    return groupBelongings(
+      displayItems.value,
+      locationIndex.value,
+      activeChild.value ?? props.location.id,
+      sourceAnchors.value
+    );
   });
   const dataState = computed(() => {
     if (indexStatus.value === "loading") {
@@ -95,7 +156,7 @@
     if (indexStatus.value === "error") {
       return "error";
     }
-    if (displayPhase.value === "ready" && displayWalk.value.loaded.length === 0) {
+    if (displayPhase.value === "ready" && displayWalk.value.loaded.length === 0 && !revealedRecord.value) {
       return "empty";
     }
     return displayPhase.value;
@@ -232,26 +293,141 @@
     void pump("room");
   }
 
+  function dropQueryKeys(keys: string[]) {
+    const current = (route.fullPath.split("#")[0] ?? route.fullPath).split("#")[0] ?? route.path;
+    const url = new URL(current, "http://homebox.local");
+    let removed = false;
+    for (const key of keys) {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key);
+        removed = true;
+      }
+    }
+    if (!removed) {
+      return;
+    }
+    const next = `${url.pathname}${url.search}`;
+    if (next !== current) {
+      void navigateTo(next, { replace: true });
+    }
+  }
+
+  async function verifySource(
+    sourceId: string,
+    token: number,
+    collectionAtStart: string | null,
+    locationAtStart: string
+  ) {
+    const api = useUserApi();
+    const [itemResp, pathResp] = await Promise.all([api.items.get(sourceId), api.items.fullpath(sourceId)]);
+    if (
+      !shouldApplySourceProbe({
+        token,
+        currentToken: sourceToken,
+        collectionAtStart,
+        currentCollectionId: props.collectionId,
+        locationAtStart,
+        currentLocationId: props.location.id,
+        sourceAtStart: sourceId,
+        currentSourceId: hint.value.sourceItemId ?? null,
+      })
+    ) {
+      return;
+    }
+    const entity = itemResp.data;
+    const record = entity && !itemResp.error ? browseRecordFromSummary(entity) : null;
+    const indexedLocation = locationIndex.value.some(
+      location => location.id.toLowerCase() === record?.id.toLowerCase()
+    );
+    if (!record || entity?.entityType?.isLocation === true || indexedLocation) {
+      sourceProbe.value = { status: "missing" };
+      return;
+    }
+    const classified = classifySourcePath(pathResp.error ? [] : (pathResp.data ?? []), record.id, locationIndex.value);
+    const nearest = nearestVerifiedLocation(entity?.location?.id, classified.nearestLocationId, locationIndex.value);
+    if (!nearest || !locationInScope(nearest, locationAtStart, locationIndex.value)) {
+      sourceProbe.value = { status: "missing" };
+      return;
+    }
+    const parentId = classified.directParentId ?? record.parentId;
+    sourceProbe.value = {
+      status: "found",
+      record: parentId === record.parentId ? record : { ...record, parentId },
+      locationIds: classified.locationIds,
+      nearestLocationId: nearest,
+      anchors: classified.anchors,
+    };
+  }
+
+  watch(
+    () => [hint.value.sourceItemId ?? "", props.collectionId ?? "", props.location.id, indexStatus.value] as const,
+    ([sourceId, , locationId, status]) => {
+      const token = ++sourceToken;
+      if (!sourceId || status !== "ready") {
+        sourceProbe.value = sourceId && status !== "ready" ? { status: "pending" } : { status: "absent" };
+        return;
+      }
+      const hintedCollection = hint.value.collectionId;
+      const currentCollection = props.collectionId?.toLowerCase() ?? "";
+      if (hintedCollection && hintedCollection !== currentCollection) {
+        sourceProbe.value = { status: "absent" };
+        return;
+      }
+      sourceProbe.value = { status: "pending" };
+      void verifySource(sourceId, token, props.collectionId, locationId);
+    },
+    { immediate: true }
+  );
+
+  watch(
+    () => resolvedSource.value.dropKeys.join(","),
+    () => {
+      if (resolvedSource.value.pending || indexStatus.value !== "ready") {
+        return;
+      }
+      dropQueryKeys(resolvedSource.value.dropKeys);
+    }
+  );
+
+  watch(activeChild, () => {
+    if (indexStatus.value !== "ready") {
+      return;
+    }
+    startChildWalk();
+  });
+
   watch(
     () => [props.location.id, props.collectionId] as const,
     () => {
-      selectedChildId.value = null;
+      userBranch.value = undefined;
+      sourceToken += 1;
+      sourceProbe.value = { status: "absent" };
       void loadIndexAndRoom();
     },
     { immediate: true }
   );
 
   function selectPlace(id: string | null) {
-    if (id == null || id === activeChild.value) {
-      selectedChildId.value = null;
+    if (id != null && !childIds.value.includes(id)) {
       return;
     }
-    if (!childIds.value.includes(id)) {
-      selectedChildId.value = null;
+    const next = id == null || id === activeChild.value ? null : id;
+    userBranch.value = next;
+    const hintedBranch = canonicalLocationId(hint.value.branchId, locationIndex.value);
+    if (hintedBranch && next && hintedBranch === next) {
       return;
     }
-    selectedChildId.value = id;
-    startChildWalk();
+    const scope = next ?? props.location.id;
+    const nearest = sourceProbe.value.status === "found" ? sourceProbe.value.nearestLocationId : null;
+    const keepSource = sourceProbe.value.status === "found" && locationInScope(nearest, scope, locationIndex.value);
+    if (keepSource) {
+      return;
+    }
+    if (hint.value.sourceItemId || hint.value.branchId || hint.value.destinationId) {
+      sourceToken += 1;
+      sourceProbe.value = { status: "absent" };
+      dropQueryKeys(["branchId", "destinationId", "sourceItemId"]);
+    }
   }
 
   function loadMore() {
@@ -363,6 +539,10 @@
     :data-state="dataState"
     :data-location-id="location.id"
     :data-page-size="LOCATION_BROWSE_PAGE_SIZE"
+    :data-branch-id="activeChild ?? ''"
+    :data-destination-id="visibleDestinationId ?? ''"
+    :data-source-item-id="highlightedSourceId ?? ''"
+    :data-source-state="highlightedSourceId ? 'opened' : resolvedSource.pending ? 'pending' : 'none'"
   >
     <Title>{{ location.name }}</Title>
 
@@ -509,12 +689,13 @@
     </p>
     <template v-else>
       <p v-if="dataState === 'partial'" class="mb-3 text-sm text-muted-foreground" data-testid="location-partial">
-        {{ $t("purrfect.place_partial", { shown: displayWalk.loaded.length }) }}
+        {{ $t("purrfect.place_partial", { shown: displayItems.length }) }}
       </p>
       <LocationInventoryRows
         :complete="walkIsComplete(displayWalk)"
         :groups="displayGroups"
-        :partial-items="displayWalk.loaded"
+        :partial-items="displayItems"
+        :opened-item-id="highlightedSourceId"
       />
       <Button
         v-if="dataState === 'partial'"

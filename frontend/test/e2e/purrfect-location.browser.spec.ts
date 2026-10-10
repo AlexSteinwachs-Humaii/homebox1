@@ -136,6 +136,31 @@ const belongings = [
   ),
 ];
 
+function ancestorChain(id: string): string[] {
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let current: string | null = id;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    chain.push(current);
+    const place = locations.find(location => location.id === current);
+    const item = belongings.find(row => row.id === current);
+    current = place?.parent?.id ?? item?.parent?.id ?? null;
+  }
+  return chain.reverse();
+}
+
+function nearestLocationId(id: string): string | null {
+  const chain = ancestorChain(id);
+  for (let index = chain.length - 2; index >= 0; index -= 1) {
+    const candidate = chain[index];
+    if (candidate && locations.some(location => location.id === candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function entityOut(id: string, name: string, children: unknown[] = []) {
   return {
     ...locationSummary(id, name, null),
@@ -201,6 +226,25 @@ function installRoutes(page: Page, queries: ParentQuery[]) {
       return;
     }
 
+    const pathMatch = path.match(/\/entities\/([0-9a-f-]{36})\/path$/i);
+    if (pathMatch) {
+      const id = pathMatch[1]!.toLowerCase();
+      const chain = ancestorChain(id);
+      if (chain.length === 0) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "not found" }),
+        });
+        return;
+      }
+      await fulfillJson(
+        route,
+        chain.map(entry => ({ id: entry, name: entry, type: "location" }))
+      );
+      return;
+    }
+
     const parentIds = url.searchParams.getAll("parentIds");
     if (parentIds.length > 0) {
       const pageNumber = Number(url.searchParams.get("page") || "1");
@@ -220,9 +264,24 @@ function installRoutes(page: Page, queries: ParentQuery[]) {
     const itemMatch = path.match(/\/entities\/([0-9a-f-]{36})$/i);
     if (itemMatch) {
       const id = itemMatch[1]!.toLowerCase();
+      const belonging = belongings.find(item => item.id === id);
+      if (belonging) {
+        const nearest = nearestLocationId(id);
+        await fulfillJson(route, {
+          ...entityOut(id, belonging.name),
+          ...belonging,
+          location: nearest ? locationSummary(nearest, nearest, null) : null,
+          entityType: { id: ITEM_TYPE, name: "Item", color: "#888888", isLocation: false },
+        });
+        return;
+      }
       const known = locations.find(location => location.id === id);
       if (!known) {
-        await route.continue();
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "not found" }),
+        });
         return;
       }
       const children =
@@ -393,4 +452,185 @@ test("pagination does not present a page as the room total or a finished shelf g
     "href",
     "/item/bbbbbbbb-bbbb-4bbb-8bbb-000000000012"
   );
+});
+
+const LAMP_SOURCE = LAMP;
+const PAGED_LAST = "bbbbbbbb-bbbb-4bbb-8bbb-000000000012";
+const DELETED = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const OTHER_COLLECTION = "22222222-2222-4222-8222-222222222222";
+
+function contextHref(root: string, params: Record<string, string>) {
+  const query = new URLSearchParams({ rootLocationId: root, ...params });
+  return `/location/${root}?${query.toString()}`;
+}
+
+test("item context selects the branch, keeps a deeper destination, and marks the real row Opened", async ({ page }) => {
+  test.setTimeout(120_000);
+  const queries: ParentQuery[] = [];
+  const mutations: string[] = [];
+  await login(page);
+  await choosePurrfect(page);
+  await installRoutes(page, queries);
+  page.on("request", request => {
+    if (request.method() !== "GET" && request.url().includes("/api/")) {
+      mutations.push(`${request.method()} ${request.url()}`);
+    }
+  });
+
+  const href = contextHref(ANNEX, {
+    branchId: PAINT,
+    destinationId: BIN,
+    sourceItemId: LAMP_SOURCE,
+  });
+  await page.goto(href);
+  const view = page.getByTestId("purrfect-location");
+  await expect(view).toHaveAttribute("data-source-state", "opened", { timeout: 30_000 });
+  await expect(view).toHaveAttribute("data-branch-id", PAINT);
+  await expect(view).toHaveAttribute("data-destination-id", BIN);
+  await expect(view).toHaveAttribute("data-source-item-id", LAMP_SOURCE);
+  await expect(page.locator(`[data-place-id='${PAINT}']`)).toHaveAttribute("data-active", "true");
+  await expect(page.locator(`[data-place-id='${BIN}']`)).toHaveCount(0);
+  await expect(page.getByTestId("whole-room")).toHaveAttribute("data-active", "false");
+  const opened = page.locator(`[data-item-id='${LAMP_SOURCE}']`);
+  await expect(opened).toHaveAttribute("data-opened", "true");
+  await expect(opened.getByTestId("location-item-opened")).toHaveText("Opened");
+  await expect(opened).toHaveCount(1);
+  expect(mutations).toEqual([]);
+
+  await page.reload();
+  await expect(view).toHaveAttribute("data-source-state", "opened", { timeout: 30_000 });
+  await expect(view).toHaveAttribute("data-state", "ready");
+  await expect(view).toHaveAttribute("data-destination-id", BIN);
+  await expect(page.locator(`[data-item-id='${LAMP_SOURCE}']`)).toHaveCount(1);
+  expect(mutations).toEqual([]);
+
+  await page.locator(`[data-place-id='${SPARE}']`).click();
+  await expect(page.locator(`[data-place-id='${SPARE}']`)).toHaveAttribute("data-active", "true");
+  await expect(view).toHaveAttribute("data-source-state", "none");
+  await expect(view).toHaveAttribute("data-source-item-id", "");
+  await expect(view).toHaveAttribute("data-destination-id", "");
+  await expect(page).not.toHaveURL(/sourceItemId|destinationId|branchId/);
+  await expect(page.locator(`[data-item-id='${LAMP_SOURCE}']`)).toHaveCount(0);
+  expect(mutations).toEqual([]);
+});
+
+test("a source on another page is revealed from the real record and not duplicated", async ({ page }) => {
+  test.setTimeout(120_000);
+  const queries: ParentQuery[] = [];
+  await login(page);
+  await choosePurrfect(page);
+  await installRoutes(page, queries);
+  await page.goto(
+    contextHref(PAGE_ROOM, {
+      destinationId: PAGE_ROOM,
+      sourceItemId: PAGED_LAST,
+    })
+  );
+
+  const view = page.getByTestId("purrfect-location");
+  await expect(view).toHaveAttribute("data-source-state", "opened", { timeout: 30_000 });
+  await expect(view).toHaveAttribute("data-state", "partial");
+  await expect(view).toHaveAttribute("data-branch-id", "");
+  await expect(page.locator(`[data-item-id='${PAGED_LAST}']`)).toHaveCount(1);
+  await expect(page.locator(`[data-item-id='${PAGED_LAST}']`)).toHaveAttribute("data-opened", "true");
+  await expect(page.getByTestId("location-item-row")).toHaveCount(11);
+  await expect(page.getByTestId("location-counts")).toHaveAttribute("data-records", "");
+
+  await page.getByTestId("location-load-more").click();
+  await expect(view).toHaveAttribute("data-state", "ready");
+  await expect(page.locator(`[data-item-id='${PAGED_LAST}']`)).toHaveCount(1);
+  await expect(page.getByTestId("location-item-row")).toHaveCount(12);
+  await expect(page.getByTestId("location-counts")).toHaveAttribute("data-records", "12");
+});
+
+test("malformed, deleted, unrelated and other-collection hints fall back without a fake row", async ({ page }) => {
+  test.setTimeout(120_000);
+  const queries: ParentQuery[] = [];
+  const sourceGets: string[] = [];
+  await login(page);
+  await choosePurrfect(page);
+  await installRoutes(page, queries);
+  page.on("request", request => {
+    if (request.method() === "GET" && request.url().includes(`/entities/${LAMP_SOURCE}`)) {
+      sourceGets.push(request.url());
+    }
+  });
+
+  await page.goto(`/location/${ANNEX}?sourceItemId=not-a-uuid&branchId=nope&destinationId=1`);
+  const view = page.getByTestId("purrfect-location");
+  await expect(view).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  await expect(view).toHaveAttribute("data-source-state", "none");
+  await expect(page.getByTestId("whole-room")).toHaveAttribute("data-active", "true");
+  await expect(page).not.toHaveURL(/sourceItemId|branchId|destinationId/);
+
+  await page.goto(
+    contextHref(ANNEX, {
+      branchId: PAINT,
+      destinationId: BIN,
+      sourceItemId: DELETED,
+    })
+  );
+  await expect(view).toHaveAttribute("data-source-state", "none", { timeout: 30_000 });
+  await expect(page.locator(`[data-item-id='${DELETED}']`)).toHaveCount(0);
+  await expect(page.getByTestId("whole-room")).toHaveAttribute("data-active", "true");
+  await expect(page).not.toHaveURL(/sourceItemId/);
+
+  await page.goto(
+    contextHref(ANNEX, {
+      branchId: LOFT,
+      destinationId: BIN,
+      sourceItemId: LAMP_SOURCE,
+    })
+  );
+  await expect(view).toHaveAttribute("data-source-state", "none", { timeout: 30_000 });
+  await expect(view).toHaveAttribute("data-branch-id", "");
+  await expect(page.locator(`[data-item-id='${LAMP_SOURCE}'][data-opened='true']`)).toHaveCount(0);
+  await expect(page).not.toHaveURL(/branchId=/);
+  expect(queries.some(query => query.parentIds.includes(LOFT) && !query.parentIds.includes(ANNEX))).toBe(false);
+
+  sourceGets.length = 0;
+  await page.goto(
+    `/location/${ANNEX}?collectionId=${OTHER_COLLECTION}&branchId=${PAINT}&destinationId=${BIN}&sourceItemId=${LAMP_SOURCE}`
+  );
+  await expect(view).toHaveAttribute("data-source-state", "none", { timeout: 30_000 });
+  await expect(page).not.toHaveURL(new RegExp(OTHER_COLLECTION));
+  await expect(page).not.toHaveURL(/sourceItemId/);
+  await expect(page.locator(`[data-opened='true']`)).toHaveCount(0);
+  expect(sourceGets).toEqual([]);
+});
+
+test("a late source lookup cannot restore context after the room changes", async ({ page }) => {
+  test.setTimeout(120_000);
+  const queries: ParentQuery[] = [];
+  let releaseLookup: (() => void) | null = null;
+  const held = new Promise<void>(resolve => {
+    releaseLookup = resolve;
+  });
+  await login(page);
+  await choosePurrfect(page);
+  await installRoutes(page, queries);
+  await page.route(new RegExp(`/entities/${LAMP_SOURCE}$`), async route => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await held;
+    await route.fallback();
+  });
+
+  await page.goto(
+    contextHref(ANNEX, {
+      branchId: PAINT,
+      destinationId: BIN,
+      sourceItemId: LAMP_SOURCE,
+    })
+  );
+  const view = page.getByTestId("purrfect-location");
+  await expect(view).toHaveAttribute("data-source-state", "pending", { timeout: 30_000 });
+  await page.goto(`/location/${ATTIC}`);
+  releaseLookup?.();
+  await expect(view).toHaveAttribute("data-location-id", ATTIC, { timeout: 30_000 });
+  await expect(view).toHaveAttribute("data-source-state", "none");
+  await expect(page.locator(`[data-item-id='${LAMP_SOURCE}']`)).toHaveCount(0);
+  await expect(page.getByTestId("location-item-opened")).toHaveCount(0);
 });
