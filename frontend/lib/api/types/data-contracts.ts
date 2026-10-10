@@ -745,6 +745,7 @@ export interface EntityCreate {
   /** @maxLength 1000 */
   description: string;
   entityTypeId: string;
+  insured?: boolean | null;
   /** @maxLength 255 */
   manufacturer?: string | null;
   /**
@@ -759,6 +760,15 @@ export interface EntityCreate {
    */
   name: string;
   parentId?: string | null;
+  /**
+   * Purchase and insurance are optional. Nil (omitted or JSON null) keeps
+   * the column defaults (price 0, empty vendor, not insured) so existing
+   * clients keep working. Explicit values, including false and 0, are
+   * written in the same insert as the rest of the entity.
+   * @maxLength 255
+   */
+  purchaseFrom?: string | null;
+  purchasePrice?: number | null;
   quantity: number;
   /** Edges */
   tagIds: string[];
@@ -795,7 +805,11 @@ export interface EntityOut {
   id: string;
   imageId?: string | null;
   insured: boolean;
-  /** Container-specific (populated when querying locations) */
+  /**
+   * ItemCount is set only after a location query has computed it.
+   * A pointer keeps a real zero in JSON and omits a count that was never
+   * loaded, so clients do not paint "not loaded" as zero.
+   */
   itemCount: number;
   /** Warranty */
   lifetimeWarranty: boolean;
@@ -857,7 +871,11 @@ export interface EntitySummary {
   id: string;
   imageId?: string | null;
   insured: boolean;
-  /** Container-specific (populated when querying locations) */
+  /**
+   * ItemCount is set only after a location query has computed it.
+   * A pointer keeps a real zero in JSON and omits a count that was never
+   * loaded, so clients do not paint "not loaded" as zero.
+   */
   itemCount: number;
   name: string;
   /** Edges */
@@ -1364,12 +1382,22 @@ export interface EntityTemplateCreateItemRequest {
    * precedence; when empty the repository falls back to the group's default.
    */
   entityTypeId: string;
+  insured?: boolean | null;
   /**
    * @minLength 1
    * @maxLength 255
    */
   name: string;
   parentId: string;
+  /** @maxLength 255 */
+  purchaseFrom?: string | null;
+  /**
+   * PurchasePrice, PurchaseFrom and Insured are explicit overrides. Nil
+   * (omitted or JSON null) keeps the template default for insured, and the
+   * zero purchase defaults — templates do not store a price or vendor.
+   * An explicit false overrides a true template insured default.
+   */
+  purchasePrice?: number | null;
   quantity: number;
   tagIds: string[];
 }

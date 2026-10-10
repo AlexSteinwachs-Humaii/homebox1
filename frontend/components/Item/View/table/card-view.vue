@@ -7,6 +7,8 @@
   import DropdownAction from "./data-table-dropdown.vue";
 
   const preferences = useViewPreferences();
+  const { theme } = useTheme();
+  const purrfect = computed(() => theme.value === "purrfect-home");
 
   const props = defineProps<{
     table: TableType<EntitySummary>;
@@ -54,7 +56,11 @@
     <MdiSelectSearch class="size-10" />
     <p>{{ $t("items.no_results") }}</p>
   </div>
-  <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+  <div
+    v-else
+    class="grid grid-cols-1 gap-4 sm:grid-cols-2"
+    :class="purrfect ? 'lg:grid-cols-3' : 'md:grid-cols-3 lg:grid-cols-4'"
+  >
     <ItemCard
       v-for="item in table.getRowModel().rows"
       :key="item.original.id"

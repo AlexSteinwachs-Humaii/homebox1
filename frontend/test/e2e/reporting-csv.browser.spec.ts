@@ -15,7 +15,7 @@ const item = {
   updatedAt: "2026-10-09T12:00:00Z",
 };
 
-async function dashboard(page: Page, empty = false, waitForRecords?: Promise<void>) {
+async function dashboard(page: Page, empty = false, waitForRecords?: Promise<void>, records = [item]) {
   await page.context().addCookies([{ name: "hb.auth.session", value: "true", url: test.info().project.use.baseURL! }]);
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -28,10 +28,10 @@ async function dashboard(page: Page, empty = false, waitForRecords?: Promise<voi
     else if (path.endsWith("/groups/all")) body = [group];
     else if (path.endsWith("/groups")) body = group;
     else if (path.endsWith("/groups/statistics"))
-      body = { totalItems: 1, totalLocations: 0, totalTags: 0, totalPrice: 129 };
+      body = { totalItems: records.length, totalLocations: 0, totalTags: 0, totalItemPrice: 129 };
     else if (path.endsWith("/entities")) {
       await waitForRecords;
-      body = { items: empty ? [] : [item], total: empty ? 0 : 1, page: 1, pageSize: 5 };
+      body = { items: empty ? [] : records, total: empty ? 0 : records.length, page: 1, pageSize: 5 };
     }
     await route.fulfill({ json: body });
   });
@@ -90,4 +90,38 @@ test("loading and empty results explain why export is unavailable", async ({ pag
   release();
   await expect(page.getByText("No records are visible to export.")).toBeVisible();
   await expect(exportButton).toBeDisabled();
+});
+
+test("Purrfect overview retains its layout and exports all five visible recent records", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("homebox/preferences/location", JSON.stringify({ theme: "purrfect-home" }));
+  });
+  const records = Array.from({ length: 5 }, (_, index) => ({
+    ...item,
+    id: `csv-item-${index}`,
+    name: `Record ${index}`,
+  }));
+  await dashboard(page, false, undefined, records);
+  await expect(page.locator('[data-overview="purrfect"]')).toBeVisible();
+  await expect(page.getByTestId("purrfect-hero")).toBeVisible();
+  await expect(page.getByTestId("recent-item")).toHaveCount(5);
+  await expect(page.getByTestId("stats-state")).toHaveAttribute("data-state", "ready");
+  await page.getByRole("button", { name: "Export CSV", exact: true }).click();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("dialog").getByRole("button", { name: "Download CSV" }).click();
+  const download = await downloadPromise;
+  const csv = await readFile((await download.path())!, "utf8");
+  expect(csv.split("\r\n")).toHaveLength(6);
+  for (const record of records) expect(csv).toContain(`"${record.name}"`);
+});
+
+test("mobile classic overview exports the visible cards without needing a desktop table", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await dashboard(page);
+  await expect(page.getByRole("table")).toHaveCount(0);
+  await page.getByRole("button", { name: "Export CSV", exact: true }).click();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("dialog").getByRole("button", { name: "Download CSV" }).click();
+  const download = await downloadPromise;
+  expect(await readFile((await download.path())!, "utf8")).toContain('"Drill"');
 });

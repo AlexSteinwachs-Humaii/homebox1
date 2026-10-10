@@ -19,6 +19,7 @@
     locationFlatTree?: FlatTreeItem[];
     pagination?: Pagination;
     disableSort?: boolean;
+    hideHeader?: boolean;
   }>();
 
   const emit = defineEmits<{
@@ -55,7 +56,11 @@
     <MaintenanceEditModal />
     <ItemChangeDetails />
 
-    <BaseSectionHeader class="flex items-center justify-between" :class="{ 'mb-2 mt-4': !externalPagination }">
+    <BaseSectionHeader
+      v-if="!hideHeader"
+      class="flex items-center justify-between"
+      :class="{ 'mb-2 mt-4': !externalPagination }"
+    >
       <div class="flex gap-2 text-nowrap">
         {{ $t("components.item.view.selectable.items") }}
         <Badge v-if="!externalPagination">
@@ -89,7 +94,10 @@
       </template>
     </BaseSectionHeader>
 
-    <p v-if="externalPagination && pagination!.totalSize > 0" class="mb-4 flex items-center text-base font-medium">
+    <p
+      v-if="!hideHeader && externalPagination && pagination!.totalSize > 0"
+      class="mb-4 flex items-center text-base font-medium"
+    >
       {{ $t("items.results", { total: pagination!.totalSize }) }}
       <span class="ml-auto text-base">
         {{

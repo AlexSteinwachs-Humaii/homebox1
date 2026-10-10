@@ -3,6 +3,7 @@
   import type { EntitySummary } from "~/lib/api/types/data-contracts";
   import TagChip from "@/components/Tag/Chip.vue";
   import Badge from "~/components/ui/badge/Badge.vue";
+  import EntityImage from "@/components/Inventory/EntityImage.vue";
 
   const props = defineProps<{
     item: EntitySummary;
@@ -11,25 +12,19 @@
   const itemTags = computed(() => {
     return useTagStore().withAncestors(props.item.tags);
   });
-
-  const api = useUserApi();
-
-  const imageUrl = computed(() => {
-    if (!props.item.imageId) {
-      return "/no-image.jpg";
-    }
-    if (props.item.thumbnailId) {
-      return api.authURL(`/entities/${props.item.id}/attachments/${props.item.thumbnailId}`);
-    } else {
-      return api.authURL(`/entities/${props.item.id}/attachments/${props.item.imageId}`);
-    }
-  });
 </script>
 
 <template>
   <div class="flex items-start gap-3">
-    <div class="shrink-0">
-      <img :src="imageUrl" class="size-32 rounded-lg bg-muted object-cover" />
+    <div class="size-32 shrink-0 overflow-hidden rounded-lg">
+      <EntityImage
+        class="size-32"
+        :entity-id="item.id"
+        :name="item.name"
+        :image-id="item.imageId"
+        :thumbnail-id="item.thumbnailId"
+        fit="cover"
+      />
     </div>
     <div class="flex min-w-0 flex-1 flex-col gap-2">
       <h2 class="truncate text-xl font-bold">{{ item.name }}</h2>

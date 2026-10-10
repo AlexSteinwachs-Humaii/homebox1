@@ -5,12 +5,12 @@
         variant="outline"
         role="combobox"
         :aria-expanded="open"
-        :size="sidebar.state.value === 'collapsed' ? 'icon' : undefined"
-        :class="sidebar.state.value === 'collapsed' ? 'size-10' : 'w-full justify-between drop-shadow-md'"
+        :size="collapsed ? 'icon' : undefined"
+        :class="collapsed ? 'size-10' : ['w-full justify-between', triggerClass ?? 'drop-shadow-md']"
         :aria-label="t('components.collection.selector.select_collection')"
         :title="t('components.collection.selector.select_collection')"
       >
-        <template v-if="sidebar.state.value === 'collapsed'">
+        <template v-if="collapsed">
           <MdiHomeGroup class="size-5" />
         </template>
         <template v-else>
@@ -28,9 +28,7 @@
         </template>
       </Button>
     </PopoverTrigger>
-    <PopoverContent
-      :class="[sidebar.state.value === 'collapsed' ? 'min-w-48 p-0' : 'w-[--reka-popper-anchor-width] p-0']"
-    >
+    <PopoverContent :class="[collapsed ? 'min-w-48 p-0' : 'w-[--reka-popper-anchor-width] p-0']">
       <Command :ignore-filter="true">
         <CommandGroup>
           <CommandItem
@@ -105,6 +103,11 @@
   import { DialogID } from "@/components/ui/dialog-provider/utils";
   import { useDialog } from "~/components/ui/dialog-provider";
 
+  const props = defineProps<{
+    triggerClass?: string;
+    expanded?: boolean;
+  }>();
+
   const { openDialog } = useDialog();
 
   const { t } = useI18n();
@@ -124,6 +127,7 @@
   }
 
   const sidebar = useSidebar();
+  const collapsed = computed(() => !props.expanded && sidebar.state.value === "collapsed");
 
   const filteredCollections = computed(() => {
     const filtered = fuzzysort.go(search.value, collectionsList.value, { key: "name", all: true }).map(i => i.obj);

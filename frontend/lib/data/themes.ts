@@ -1,5 +1,6 @@
 export type DaisyTheme =
   | "homebox"
+  | "purrfect-home"
   | "light"
   | "dark"
   | "cupcake"
@@ -39,6 +40,10 @@ export const themes: ThemeOption[] = [
   {
     label: "Homebox",
     value: "homebox",
+  },
+  {
+    label: "Purrfect Home",
+    value: "purrfect-home",
   },
   {
     label: "Garden",
@@ -152,6 +157,50 @@ export const themes: ThemeOption[] = [
     label: "Winter",
     value: "winter",
   },
+];
+
+/** Class-safe theme token. Hyphenated slugs such as purrfect-home are valid. */
+const THEME_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function isThemeSlug(value: unknown): value is string {
+  return typeof value === "string" && THEME_SLUG.test(value);
+}
+
+/**
+ * Classes cleared from <html> before a theme is applied.
+ * `dark` is the legacy color-mode class, not a Daisy theme slug.
+ */
+export const removableThemeClasses = [
+  "dark",
+  "theme-aqua",
+  "theme-black",
+  "theme-bumblebee",
+  "theme-cmyk",
+  "theme-corporate",
+  "theme-cupcake",
+  "theme-cyberpunk",
+  "theme-dracula",
+  "theme-emerald",
+  "theme-fantasy",
+  "theme-forest",
+  "theme-garden",
+  "theme-halloween",
+  "theme-light",
+  "theme-lofi",
+  "theme-luxury",
+  "theme-pastel",
+  "theme-purrfect-home",
+  "theme-retro",
+  "theme-synthwave",
+  "theme-valentine",
+  "theme-wireframe",
+  "theme-autumn",
+  "theme-business",
+  "theme-acid",
+  "theme-lemonade",
+  "theme-night",
+  "theme-coffee",
+  "theme-winter",
 ];
 
 export const darkThemes: DaisyTheme[] = [

@@ -1,60 +1,91 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import type { EntitySummary } from "../../lib/api/types/data-contracts";
 import { itemsTable } from "./table";
 
+vi.mock("~~/composables/use-collections", () => ({
+  activeCollectionId: () => null,
+}));
+vi.mock("@/composables/use-server-events", () => ({
+  ServerEvent: { EntityMutation: "mutation" },
+  onServerEvent: vi.fn(),
+}));
 afterEach(() => vi.unstubAllGlobals());
 
-it("binds the displayed page to its request collection and hides late cross-collection responses", async () => {
+function setup() {
   const preferences = ref({ collectionId: "a" });
-  const data = ref<{ items: EntitySummary[]; collectionId: string | null }>();
-  const status = ref("pending");
-  let fetchPage!: () => Promise<{
-    items: EntitySummary[];
-    collectionId: string | null;
-  }>;
-  let watched: unknown;
-  const records = [{ id: "a1", name: "Allowed" }] as EntitySummary[];
-  const getAll = vi.fn(async () => ({
-    data: {
-      items:
-        preferences.value.collectionId === "a"
-          ? records
-          : ([{ id: "b1", name: "Other allowed record" }] as EntitySummary[]),
-    },
-  }));
-  const tenants: string[] = [];
+  const getAll = vi.fn();
+  let fetchPage!: () => Promise<unknown>;
+  const refresh = vi.fn(() => fetchPage());
   vi.stubGlobal("computed", computed);
+  vi.stubGlobal("ref", ref);
+  vi.stubGlobal("watch", watch);
+  vi.stubGlobal("useCollections", () => ({ selectedId: ref(null) }));
   vi.stubGlobal("useViewPreferences", () => preferences);
-  vi.stubGlobal("useUserApi", () => {
-    tenants.push(preferences.value.collectionId);
-    return { items: { getAll } };
-  });
-  vi.stubGlobal("useAsyncData", (_key: string, handler: typeof fetchPage, options: { watch: unknown }) => {
+  vi.stubGlobal("useUserApi", () => ({ items: { getAll } }));
+  vi.stubGlobal("useAsyncData", (_key: unknown, handler: typeof fetchPage) => {
     fetchPage = handler;
-    watched = options.watch;
-    return { data, status, refresh: vi.fn() };
+    return { refresh };
   });
-  vi.stubGlobal("ServerEvent", { EntityMutation: "mutation" });
-  vi.stubGlobal("onServerEvent", vi.fn());
   const table = itemsTable();
-  expect(table.value.loading).toBe(true);
-  const pending = fetchPage();
+  return { preferences, getAll, table, fetchPage };
+}
+
+it("binds displayed/exported records to their collection and ignores late responses", async () => {
+  const { preferences, getAll, table, fetchPage } = setup();
+  let resolveA!: (value: unknown) => void;
+  getAll.mockReturnValueOnce(new Promise(resolve => (resolveA = resolve)));
+  expect(table.loading.value).toBe(true);
+  const pendingA = fetchPage();
   preferences.value.collectionId = "b";
-  data.value = await pending;
-  status.value = "success";
-  expect(table.value.items).toEqual([]);
-  expect(table.value.loading).toBe(true);
-  expect(getAll).toHaveBeenCalledExactlyOnceWith({
+  expect(table.items.value).toEqual([]);
+  expect(table.collectionId.value).toBe("b");
+  getAll.mockResolvedValueOnce({
+    data: { items: [{ id: "b1", name: "Allowed" }] as EntitySummary[] },
+  });
+  await fetchPage();
+  resolveA({ data: { items: [{ id: "a1", name: "Old collection" }] } });
+  await pendingA;
+  expect(table.items.value.map(item => item.id)).toEqual(["b1"]);
+  expect(table.loading.value).toBe(false);
+  expect(getAll).toHaveBeenCalledWith({
     page: 1,
     pageSize: 5,
     orderBy: "createdAt",
   });
-  expect(tenants).toEqual(["a"]);
-  expect(watched).toHaveLength(1);
-  data.value = await fetchPage();
-  expect(tenants).toEqual(["a", "b"]);
-  expect(table.value.collectionId).toBe("b");
-  expect(table.value.items.map(item => item.id)).toEqual(["b1"]);
-  expect(table.value.loading).toBe(false);
+});
+
+it("disables export during refresh and keeps errors distinct from a successful empty result", async () => {
+  const { getAll, table, fetchPage } = setup();
+  getAll.mockResolvedValueOnce({
+    data: { items: [{ id: "a1", name: "Allowed" }] },
+  });
+  await fetchPage();
+  expect(table.status.value).toBe("ready");
+  getAll.mockResolvedValueOnce({ error: new Error("Unavailable") });
+  const refresh = table.refresh();
+  expect(table.loading.value).toBe(true);
+  expect(table.items.value).toEqual([]);
+  await refresh;
+  expect(table.status.value).toBe("error");
+  expect(table.loading.value).toBe(true);
+  getAll.mockResolvedValueOnce({ data: { items: [] } });
+  await table.refresh();
+  expect(table.status.value).toBe("ready");
+  expect(table.loading.value).toBe(false);
+  expect(table.items.value).toEqual([]);
+});
+
+it("ignores an older response after a newer refresh has settled", async () => {
+  const { getAll, table, fetchPage } = setup();
+  let resolveOld!: (value: unknown) => void;
+  getAll.mockReturnValueOnce(new Promise(resolve => (resolveOld = resolve)));
+  const old = fetchPage();
+  getAll.mockResolvedValueOnce({
+    data: { items: [{ id: "new", name: "New" }] },
+  });
+  await table.refresh();
+  resolveOld({ data: { items: [{ id: "old", name: "Old" }] } });
+  await old;
+  expect(table.items.value.map(item => item.id)).toEqual(["new"]);
 });

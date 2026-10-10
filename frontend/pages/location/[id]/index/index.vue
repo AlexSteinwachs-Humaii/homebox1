@@ -1,6 +1,8 @@
 <script setup lang="ts">
   import { useI18n } from "vue-i18n";
+  import { useMediaQuery } from "@vueuse/core";
   import { toast } from "@/components/ui/sonner";
+  import { PURRFECT_DESKTOP_MEDIA_QUERY } from "~~/lib/inventory-context";
   import type { AnyDetail, Details } from "~~/components/global/DetailsSection/types";
   import { filterZeroValues } from "~~/components/global/DetailsSection/types";
   import type { ItemAttachment } from "~~/lib/api/types/data-contracts";
@@ -32,6 +34,7 @@
   import ItemAttachmentsList from "~/components/Item/AttachmentsList.vue";
   import ItemImageDialog from "~/components/Item/ImageDialog.vue";
   import LocationCard from "~/components/Location/Card.vue";
+  import PurrfectBrowse from "~/components/Location/PurrfectBrowse.vue";
   import TagChip from "~/components/Tag/Chip.vue";
 
   definePageMeta({
@@ -45,19 +48,32 @@
   const route = useRoute();
   const api = useUserApi();
   const preferences = useViewPreferences();
+  const { theme } = useTheme();
+  const isDesktop = useMediaQuery(PURRFECT_DESKTOP_MEDIA_QUERY);
+  const purrfectDesktop = computed(() => theme.value === "purrfect-home" && isDesktop.value);
+  const { selectedId, selectedCollection } = useCollections();
 
   const locationId = computed<string>(() => route.params.id as string);
+  const locationFailed = ref(false);
 
-  const { data: location } = useAsyncData(locationId.value, async () => {
-    const { data, error } = await api.items.getLocation(locationId.value);
-    if (error) {
-      toast.error(t("locations.toast.failed_load_location"));
-      navigateTo("/home");
-      return;
-    }
+  const { data: location, refresh: refreshLocation } = useAsyncData(
+    () => `location:${selectedId.value ?? ""}:${locationId.value}`,
+    async () => {
+      locationFailed.value = false;
+      const { data, error } = await useUserApi().items.getLocation(locationId.value);
+      if (error) {
+        locationFailed.value = true;
+        if (!(theme.value === "purrfect-home" && isDesktop.value)) {
+          toast.error(t("locations.toast.failed_load_location"));
+          navigateTo("/home");
+        }
+        return null;
+      }
 
-    return data;
-  });
+      return data;
+    },
+    { watch: [locationId, selectedId] }
+  );
 
   const confirm = useConfirm();
 
@@ -195,7 +211,7 @@
   const { data: items, refresh: refreshItemList } = useAsyncData(
     () => locationId.value + "_item_list",
     async () => {
-      if (!locationId.value) {
+      if (!locationId.value || purrfectDesktop.value) {
         return [];
       }
 
@@ -211,7 +227,7 @@
       return resp.data.items;
     },
     {
-      watch: [locationId],
+      watch: [locationId, purrfectDesktop],
     }
   );
 </script>
@@ -220,7 +236,22 @@
   <div>
     <ItemImageDialog />
 
-    <div v-if="location">
+    <div v-if="purrfectDesktop && locationFailed" data-testid="purrfect-location" data-state="error">
+      <p>{{ $t("purrfect.place_error") }}</p>
+      <Button class="mt-3" variant="outline" data-testid="location-retry" @click="refreshLocation">
+        {{ $t("purrfect.place_retry") }}
+      </Button>
+    </div>
+    <PurrfectBrowse
+      v-else-if="purrfectDesktop && location"
+      :location="location"
+      :collection-name="selectedCollection?.name ?? ''"
+      :collection-id="selectedId"
+    />
+    <div v-else-if="purrfectDesktop && !location">
+      <p data-testid="purrfect-location" data-state="loading">{{ $t("purrfect.place_loading") }}</p>
+    </div>
+    <div v-else-if="location">
       <!-- set page title -->
       <Title>{{ location.name }}</Title>
 

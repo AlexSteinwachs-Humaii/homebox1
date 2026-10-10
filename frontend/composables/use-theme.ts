@@ -1,5 +1,5 @@
 import type { ComputedRef } from "vue";
-import type { DaisyTheme } from "~~/lib/data/themes";
+import { isThemeSlug, removableThemeClasses, type DaisyTheme } from "~~/lib/data/themes";
 
 export interface UseTheme {
   theme: ComputedRef<DaisyTheme>;
@@ -16,15 +16,18 @@ export function useTheme(): UseTheme {
       return;
     }
 
-    htmlEl.value.setAttribute("data-theme", newTheme);
+    // Unsafe stored values fall back to Homebox. Hyphenated slugs such as purrfect-home still apply.
+    const slug = isThemeSlug(newTheme) ? newTheme : "homebox";
+
+    htmlEl.value.setAttribute("data-theme", slug);
 
     const prefixedThemeClasses = Array.from(htmlEl.value.classList).filter(className => className.startsWith("theme-"));
     if (prefixedThemeClasses.length > 0) {
       htmlEl.value.classList.remove(...prefixedThemeClasses);
     }
 
-    htmlEl.value.classList.remove(...themes);
-    htmlEl.value.classList.add("theme-" + newTheme);
+    htmlEl.value.classList.remove(...removableThemeClasses);
+    htmlEl.value.classList.add("theme-" + slug);
   };
 
   const setTheme = (newTheme: DaisyTheme) => {
@@ -50,35 +53,3 @@ export function useIsThemeInList(list: DaisyTheme[]) {
     return list.includes(theme.theme.value);
   });
 }
-
-export const themes = [
-  "dark",
-  "theme-aqua",
-  "theme-black",
-  "theme-bumblebee",
-  "theme-cmyk",
-  "theme-corporate",
-  "theme-cupcake",
-  "theme-cyberpunk",
-  "theme-dracula",
-  "theme-emerald",
-  "theme-fantasy",
-  "theme-forest",
-  "theme-garden",
-  "theme-halloween",
-  "theme-light",
-  "theme-lofi",
-  "theme-luxury",
-  "theme-pastel",
-  "theme-retro",
-  "theme-synthwave",
-  "theme-valentine",
-  "theme-wireframe",
-  "theme-autumn",
-  "theme-business",
-  "theme-acid",
-  "theme-lemonade",
-  "theme-night",
-  "theme-coffee",
-  "theme-winter",
-];
