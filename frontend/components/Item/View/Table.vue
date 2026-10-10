@@ -9,11 +9,21 @@
     items: EntitySummary[];
   }>();
 
+  const emit = defineEmits<{
+    (e: "visible-records", records: EntitySummary[]): void;
+  }>();
+
   const { t } = useI18n();
 
   const columns = computed(() => makeColumns({ t }).filter(c => c.enableHiding !== false));
 </script>
 
 <template>
-  <DataTable view="table" :data="items" :columns="columns" disable-controls />
+  <DataTable
+    view="table"
+    :data="items"
+    :columns="columns"
+    disable-controls
+    @visible-records="emit('visible-records', $event)"
+  />
 </template>

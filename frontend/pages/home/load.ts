@@ -83,9 +83,7 @@ export function useOverviewResource<T>(
 
   function refresh() {
     gate.refresh();
-    if (data.value === null) {
-      status.value = "pending";
-    }
+    status.value = "pending";
     return asyncData.refresh();
   }
 

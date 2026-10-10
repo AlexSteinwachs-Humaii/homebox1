@@ -18,6 +18,7 @@
   import LocationCard from "~/components/Location/Card.vue";
   import TagChip from "~/components/Tag/Chip.vue";
   import Table from "~/components/Item/View/Table.vue";
+  import CsvExport from "~/components/Reporting/CsvExport.vue";
   import DecorativeCat from "~/components/Inventory/DecorativeCat.vue";
   import Currency from "@/components/global/Currency.vue";
 
@@ -49,7 +50,20 @@
   const tagsState = computed(() => viewState(tagsStore.tagsStatus));
   const tags = computed(() => (tagsState.value === "ready" ? tagsStore.tags : []));
 
-  const { items: recentItems, status: itemsStatus, refresh: retryItems } = itemsTable();
+  const {
+    items: recentItems,
+    status: itemsStatus,
+    refresh: retryItems,
+    collectionId: itemsCollectionId,
+    loading: itemsLoading,
+  } = itemsTable();
+  const displayedRecords = ref<EntitySummary[]>([]);
+  // A table update is emitted during render. Until then, never reuse rows from an older response.
+  const exportRecords = computed(() =>
+    purrfect.value || !breakpoints.lg
+      ? recentItems.value
+      : displayedRecords.value.filter(record => recentItems.value.includes(record))
+  );
   const { cards: statCards, status: statsStatus, refresh: retryStats } = statCardData();
   const featuredItems = computed(() => featuredBelongings(recentItems.value));
 
@@ -122,6 +136,7 @@
   <div>
     <BaseContainer v-if="purrfect" class="pb-8">
       <div data-overview="purrfect" class="flex flex-col gap-8">
+        <CsvExport :items="exportRecords" :loading="itemsLoading" :collection-id="itemsCollectionId" />
         <section
           data-testid="purrfect-hero"
           class="relative overflow-hidden rounded-3xl bg-accent p-8 text-accent-foreground"
@@ -152,7 +167,9 @@
 
         <section data-testid="explore-spaces">
           <div class="mb-4 flex items-end justify-between gap-4">
-            <h2 class="text-xl font-semibold leading-snug">{{ $t("purrfect.explore_spaces") }}</h2>
+            <h2 class="text-xl font-semibold leading-snug">
+              {{ $t("purrfect.explore_spaces") }}
+            </h2>
             <NuxtLink
               to="/locations"
               data-testid="browse-locations"
@@ -201,7 +218,9 @@
 
         <section data-testid="featured-belongings">
           <div class="mb-4 flex items-end justify-between gap-4">
-            <h2 class="text-xl font-semibold leading-snug">{{ $t("purrfect.a_few_belongings") }}</h2>
+            <h2 class="text-xl font-semibold leading-snug">
+              {{ $t("purrfect.a_few_belongings") }}
+            </h2>
             <NuxtLink
               to="/items"
               data-testid="browse-items"
@@ -256,12 +275,18 @@
         </section>
 
         <section data-testid="recent-strip" class="flex flex-wrap items-center gap-3 border-t border-border/60 pt-5">
-          <h2 class="text-sm font-semibold">{{ $t("purrfect.recently_added") }}</h2>
+          <h2 class="text-sm font-semibold">
+            {{ $t("purrfect.recently_added") }}
+          </h2>
           <p v-if="itemsStatus === 'pending'" role="status" class="text-sm text-muted-foreground">
             {{ $t("home.items_loading") }}
           </p>
-          <p v-else-if="itemsStatus === 'error'" class="text-sm text-muted-foreground">{{ $t("home.items_failed") }}</p>
-          <p v-else-if="recentItems.length === 0" class="text-sm text-muted-foreground">{{ $t("items.no_results") }}</p>
+          <p v-else-if="itemsStatus === 'error'" class="text-sm text-muted-foreground">
+            {{ $t("home.items_failed") }}
+          </p>
+          <p v-else-if="recentItems.length === 0" class="text-sm text-muted-foreground">
+            {{ $t("items.no_results") }}
+          </p>
           <NuxtLink
             v-for="item in recentItems"
             :key="item.id"
@@ -315,7 +340,9 @@
                 <Currency v-if="stat.type === 'currency'" :amount="stat.value" />
                 <template v-else>{{ formatStatNumber(stat.value, statLocale) }}</template>
               </dd>
-              <dt class="mt-1 text-xs text-muted-foreground">{{ stat.label }}</dt>
+              <dt class="mt-1 text-xs text-muted-foreground">
+                {{ stat.label }}
+              </dt>
             </div>
           </dl>
           <p class="rounded-full bg-accent px-3 py-1 text-sm text-accent-foreground" data-testid="purrfect-theme-label">
@@ -327,6 +354,7 @@
 
     <BaseContainer v-else class="flex flex-col gap-4">
       <div data-overview="classic" class="flex flex-col gap-4">
+        <CsvExport :items="exportRecords" :loading="itemsLoading" :collection-id="itemsCollectionId" />
         <section>
           <Subtitle> {{ $t("home.quick_statistics") }} </Subtitle>
           <p
@@ -403,7 +431,7 @@
             {{ $t("items.no_results") }}
           </p>
           <BaseCard v-else-if="breakpoints.lg">
-            <Table :items="recentItems" />
+            <Table :items="recentItems" @visible-records="displayedRecords = $event" />
           </BaseCard>
           <div v-else class="grid grid-cols-1 gap-4 md:grid-cols-2">
             <ItemCard v-for="item in recentItems" :key="item.id" :item="item" />

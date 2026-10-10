@@ -498,6 +498,16 @@
         "entity_type": "Entity Type"
     },
     "home": {
+        "csv": {
+            "export": "Export CSV",
+            "title": "Choose CSV columns",
+            "description": "Export the recently added records shown on this dashboard. Select the fields to include; columns appear in the order listed below. Dashboard totals are not exported.",
+            "download": "Download CSV",
+            "select_one": "Select at least one column to download a CSV.",
+            "loading": "CSV export is unavailable while records are loading.",
+            "empty": "No records are visible to export.",
+            "failed": "Could not download the CSV. Please try again."
+        },
         "items_failed": "Items could not be loaded.",
         "items_loading": "Loading items…",
         "locations_failed": "Locations could not be loaded.",

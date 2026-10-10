@@ -25,6 +25,7 @@ export enum DialogID {
   DuplicateTemporarySettings = "duplicate-temporary-settings",
   EditMaintenance = "edit-maintenance",
   Import = "import",
+  ReportingCsvExport = "reporting-csv-export",
   ItemImage = "item-image",
   ItemTableSettings = "item-table-settings",
   PrintLabel = "print-label",

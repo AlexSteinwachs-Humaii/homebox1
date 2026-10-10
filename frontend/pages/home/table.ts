@@ -15,11 +15,15 @@ async function loadRecentItems(api: UserClient) {
 }
 
 export function itemsTable() {
-  const recent = useOverviewResource("items", loadRecentItems, { entity: true });
+  const recent = useOverviewResource("items", loadRecentItems, {
+    entity: true,
+  });
 
   return {
     items: computed(() => (recent.status.value === "ready" ? (recent.data.value ?? []) : [])),
     status: recent.status,
+    collectionId: recent.collectionId,
+    loading: computed(() => recent.status.value !== "ready"),
     refresh: recent.refresh,
   };
 }
