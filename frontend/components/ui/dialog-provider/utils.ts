@@ -63,7 +63,20 @@ export type DialogParamsMap = {
     itemId: string;
     attachmentId: string;
   };
-  [DialogID.CreateEntity]: { baseType: "item"; product?: BarcodeProduct; subItem?: true } | { baseType: "location" };
+  [DialogID.CreateEntity]:
+    | {
+        baseType: "item";
+        product?: BarcodeProduct;
+        subItem?: true;
+        collectionId?: string;
+        rootLocationId?: string;
+        branchId?: string;
+        destinationId?: string;
+        sourceItemId?: string;
+        /** Stay on the originating location instead of opening the new record. */
+        contextualReturn?: boolean;
+      }
+    | { baseType: "location" };
   [DialogID.ProductImport]?: { barcode?: string };
   [DialogID.EditMaintenance]:
     | { type: "create"; itemId: string | string[] }
@@ -83,6 +96,7 @@ export type DialogParamsMap = {
  * Defines the payload type for a dialog's onClose callback.
  */
 export type DialogResultMap = {
+  [DialogID.CreateEntity]?: { created: true; id: string; contextual: boolean };
   [DialogID.ItemImage]?: { action: "delete"; id: string };
   [DialogID.EditMaintenance]?: boolean;
   [DialogID.ItemChangeDetails]?: boolean;

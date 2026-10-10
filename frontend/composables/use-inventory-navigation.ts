@@ -3,6 +3,7 @@ import { DialogID } from "~/components/ui/dialog-provider/utils";
 import {
   PURRFECT_CONTEXTUAL_ADD_PATH,
   acceptInventoryNavigation,
+  contextualCreateRequest,
   deriveItemLocationHandoff,
   discardIncompatibleInventoryContext,
   inventoryDestinationHref,
@@ -24,14 +25,16 @@ type LaunchContext = InventoryContext | string | URLSearchParams | Record<string
  * that sends Purrfect Home to `/item/add`; other themes stay on the dialog.
  */
 export function useInventoryNavigation() {
+  const route = useRoute();
   const { theme } = useTheme();
   const { selectedCollection } = useCollections();
   const { openDialog } = useDialog();
 
   function launchAddItem(context?: LaunchContext) {
+    const currentCollectionId = selectedCollection.value?.id ?? null;
     const decision = resolveAddItemLaunch({
       theme: theme.value,
-      currentCollectionId: selectedCollection.value?.id ?? null,
+      currentCollectionId,
       context: context ?? null,
       contextualAddPath: PURRFECT_CONTEXTUAL_ADD_PATH,
     });
@@ -41,8 +44,24 @@ export function useInventoryNavigation() {
     }
 
     // Incompatible context is dropped. The dialog stays the global create flow
-    // and must not inherit another collection's location ids.
-    openDialog(DialogID.CreateEntity, { params: { baseType: "item" } });
+    // and must not inherit another collection's location ids or a return URL.
+    const request = contextualCreateRequest({
+      currentCollectionId,
+      context: context ?? null,
+    });
+    openDialog(DialogID.CreateEntity, {
+      params: request ? { baseType: "item", ...request } : { baseType: "item" },
+      onClose: result => {
+        if (!result?.created || !result.contextual || !request?.rootLocationId) {
+          return;
+        }
+        const href = inventoryDestinationHref({ kind: "location", rootLocationId: request.rootLocationId }, request);
+        if (!href || route.path === `/location/${request.rootLocationId}`) {
+          return;
+        }
+        return navigateTo(href);
+      },
+    });
     return decision;
   }
 

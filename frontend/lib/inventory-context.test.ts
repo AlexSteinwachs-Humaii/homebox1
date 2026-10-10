@@ -6,8 +6,10 @@ import {
   acceptInventoryNavigation,
   collectionIdToActivate,
   deriveItemLocationHandoff,
+  contextualCreateRequest,
   discardIncompatibleInventoryContext,
   encodeInventoryContext,
+  explicitCreateLocationId,
   inventoryDestinationHref,
   itemsSearchHref,
   parseInventoryDestination,
@@ -224,6 +226,85 @@ describe("search and add item launch", () => {
         contextualAddPath: "https://evil.test/item/add",
       })
     ).toEqual({ mode: "dialog" });
+  });
+
+  it("gives the dialog a validated destination and drops redirects or another collection", () => {
+    expect(contextualCreateRequest({ currentCollectionId: COLLECTION, context: null })).toBeNull();
+    expect(contextualCreateRequest({ currentCollectionId: COLLECTION, context: {} })).toBeNull();
+
+    expect(
+      contextualCreateRequest({
+        currentCollectionId: COLLECTION,
+        context: {
+          collectionId: COLLECTION,
+          rootLocationId: ROOT,
+          branchId: BRANCH,
+          destinationId: DESTINATION,
+          sourceItemId: SOURCE,
+        },
+      })
+    ).toEqual({
+      collectionId: COLLECTION,
+      rootLocationId: ROOT,
+      branchId: BRANCH,
+      destinationId: DESTINATION,
+      sourceItemId: SOURCE,
+      contextualReturn: true,
+    });
+
+    expect(
+      contextualCreateRequest({
+        currentCollectionId: COLLECTION,
+        context: { collectionId: OTHER, destinationId: DESTINATION, returnUrl: "https://evil.test" },
+      })
+    ).toBeNull();
+    expect(
+      contextualCreateRequest({
+        currentCollectionId: COLLECTION,
+        context: { collectionId: OTHER, destinationId: DESTINATION },
+      })
+    ).toBeNull();
+    expect(
+      contextualCreateRequest({
+        currentCollectionId: COLLECTION,
+        context: { rootLocationId: ROOT, branchId: BRANCH },
+      })
+    ).toBeNull();
+  });
+
+  it("accepts an explicit location only when this collection lists it", () => {
+    expect(
+      explicitCreateLocationId({
+        destinationId: DESTINATION,
+        collectionId: COLLECTION,
+        currentCollectionId: COLLECTION,
+        knownLocationIds: [ROOT, DESTINATION.toUpperCase()],
+      })
+    ).toBe(DESTINATION.toUpperCase());
+
+    expect(
+      explicitCreateLocationId({
+        destinationId: DESTINATION,
+        collectionId: OTHER,
+        currentCollectionId: COLLECTION,
+        knownLocationIds: [DESTINATION],
+      })
+    ).toBeNull();
+    expect(
+      explicitCreateLocationId({
+        destinationId: DESTINATION,
+        collectionId: COLLECTION,
+        currentCollectionId: COLLECTION,
+        knownLocationIds: [ROOT],
+      })
+    ).toBeNull();
+    expect(
+      explicitCreateLocationId({
+        destinationId: "not-a-place",
+        currentCollectionId: COLLECTION,
+        knownLocationIds: [DESTINATION],
+      })
+    ).toBeNull();
   });
 });
 

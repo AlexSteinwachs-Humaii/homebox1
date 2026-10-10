@@ -93,6 +93,16 @@ export type InventoryNavigationResult =
 export type AddItemLaunch =
   { mode: "dialog"; reason?: InventoryContextRejection } | { mode: "page"; href: string; context: InventoryContext };
 
+/** Fields the existing creation dialog accepts before the contextual add page exists. */
+export type ContextualCreateRequest = {
+  collectionId?: InventoryId;
+  rootLocationId?: InventoryId;
+  branchId?: InventoryId;
+  destinationId: InventoryId;
+  sourceItemId?: InventoryId;
+  contextualReturn: true;
+};
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const LOCAL_ORIGIN = "http://homebox.local";
@@ -882,4 +892,82 @@ export function resolveAddItemLaunch(args: {
     href: inventoryDestinationHref({ kind: "item-add" }, context) ?? "/item/add",
     context,
   };
+}
+
+/**
+ * Validated fields for the creation dialog. Absent, incompatible, or
+ * redirect-bearing input is dropped so global create stays global.
+ * A destination is required; a shelf is never invented here.
+ */
+export function contextualCreateRequest(args: {
+  currentCollectionId?: string | null;
+  context?: InventoryContext | string | URLSearchParams | Record<string, unknown> | null;
+}): ContextualCreateRequest | null {
+  if (args.context == null) {
+    return null;
+  }
+  if (typeof args.context === "string" && args.context.trim() === "") {
+    return null;
+  }
+  if (typeof args.context === "object" && !(args.context instanceof URLSearchParams)) {
+    const present = Object.values(args.context).some(value => value != null && value !== "");
+    if (!present) {
+      return null;
+    }
+  }
+
+  const accepted = readInventoryContext(args.context, {
+    currentCollectionId: args.currentCollectionId,
+  });
+  if (!accepted.ok || !accepted.navigation.context.destinationId) {
+    return null;
+  }
+
+  const context = { ...accepted.navigation.context };
+  if (context.collectionId && args.currentCollectionId && !isCompatibleCollection(context, args.currentCollectionId)) {
+    return null;
+  }
+  if (!context.collectionId && args.currentCollectionId) {
+    const current = parseInventoryId(args.currentCollectionId);
+    if (current) {
+      context.collectionId = current;
+    }
+  }
+
+  return {
+    collectionId: context.collectionId,
+    rootLocationId: context.rootLocationId,
+    branchId: context.branchId,
+    destinationId: context.destinationId,
+    sourceItemId: context.sourceItemId,
+    contextualReturn: true,
+  };
+}
+
+/**
+ * A destination the signed-in collection actually has. Another collection's
+ * id, or an id missing from the loaded location list, is not a filing place.
+ */
+export function explicitCreateLocationId(args: {
+  destinationId?: string | null;
+  collectionId?: string | null;
+  currentCollectionId?: string | null;
+  knownLocationIds: ReadonlyArray<string> | ReadonlySet<string>;
+}): string | null {
+  const destination = parseInventoryId(args.destinationId);
+  if (!destination) {
+    return null;
+  }
+  if (args.collectionId) {
+    const requested = parseInventoryId(args.collectionId);
+    if (!requested || !isCompatibleCollection({ collectionId: requested }, args.currentCollectionId)) {
+      return null;
+    }
+  }
+  for (const id of args.knownLocationIds) {
+    if (parseInventoryId(id) === destination) {
+      return id;
+    }
+  }
+  return null;
 }

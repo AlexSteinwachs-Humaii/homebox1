@@ -12,10 +12,33 @@
     partialItems: BrowseRecord[];
     /** Transient Opened mark. Not keyboard focus and not a saved selection. */
     openedItemId?: string | null;
+    /** Exact shelf chosen for filing. Not the selected branch. */
+    selectedDestinationId?: string | null;
+    /** Selected branch, or the room. A group of this place is not an extra shelf. */
+    scopeId?: string | null;
   }>();
 
+  const emit = defineEmits<{
+    selectShelf: [id: string];
+  }>();
+
+  function sameId(left: string | null | undefined, right: string | null | undefined): boolean {
+    if (!left || !right) {
+      return false;
+    }
+    return left.toLowerCase() === right.toLowerCase();
+  }
+
   function isOpened(id: string): boolean {
-    return Boolean(props.openedItemId) && props.openedItemId?.toLowerCase() === id.toLowerCase();
+    return sameId(props.openedItemId, id);
+  }
+
+  function isShelfChoice(id: string | null): id is string {
+    return Boolean(id) && !sameId(id, props.scopeId);
+  }
+
+  function isSelectedShelf(id: string | null): boolean {
+    return isShelfChoice(id) && sameId(props.selectedDestinationId, id);
   }
 
   function asTag(tag: { id: string; name: string }): TagSummary {
@@ -38,6 +61,7 @@
       {
         id: "partial",
         label: "",
+        destinationId: null,
         items: props.partialItems.map(item => ({ ...item, placeLabel: "" })),
       },
     ];
@@ -52,9 +76,28 @@
       :data-testid="complete ? 'location-shelf-group' : 'location-partial-list'"
       :data-shelf-id="complete ? group.id : undefined"
     >
-      <h3 v-if="complete" class="mb-2 text-sm font-semibold text-foreground" data-testid="location-shelf">
-        {{ group.label || $t("purrfect.place_shelf_unknown") }}
-      </h3>
+      <div v-if="complete" class="mb-2 flex items-center justify-between gap-3">
+        <h3 class="text-sm font-semibold text-foreground" data-testid="location-shelf">
+          {{ group.label || $t("purrfect.place_shelf_unknown") }}
+        </h3>
+        <button
+          v-if="isShelfChoice(group.destinationId)"
+          type="button"
+          class="shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold"
+          :class="
+            isSelectedShelf(group.destinationId)
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-accent text-accent-foreground'
+          "
+          data-testid="location-shelf-choice"
+          :data-destination-id="group.destinationId"
+          :data-selected="isSelectedShelf(group.destinationId) ? 'true' : 'false'"
+          :aria-pressed="isSelectedShelf(group.destinationId)"
+          @click="group.destinationId && emit('selectShelf', group.destinationId)"
+        >
+          {{ isSelectedShelf(group.destinationId) ? $t("purrfect.place_filing") : $t("purrfect.place_file_here") }}
+        </button>
+      </div>
       <div class="overflow-hidden rounded-2xl border border-border bg-card">
         <article
           v-for="item in group.items"

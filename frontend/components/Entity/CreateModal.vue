@@ -50,7 +50,17 @@
       </div>
     </template>
 
-    <form class="flex min-w-0 flex-col gap-2" @submit.prevent="create()">
+    <form
+      class="flex min-w-0 flex-col gap-2"
+      data-testid="create-entity-form"
+      :data-contextual="contextualActive ? 'true' : 'false'"
+      :data-collection-id="contextualCollectionId"
+      :data-root-id="contextualRootId"
+      :data-branch-id="contextualBranchId"
+      :data-destination-id="pinnedLocationId || form.location?.id || ''"
+      :data-source-item-id="contextualSourceId"
+      @submit.prevent="create()"
+    >
       <LocationSelector v-model="form.location" />
 
       <!-- Template Info Display - Collapsible banner with distinct styling -->
@@ -238,6 +248,9 @@
   } from "~~/lib/api/types/data-contracts";
   import { useTagStore } from "~/stores/tags";
   import { useLocationStore } from "~~/stores/locations";
+  import { activeCollectionId } from "~~/composables/use-collections";
+  import { explicitCreateLocationId } from "~~/lib/inventory-context";
+  import { notifyContextualItemCreated } from "~~/lib/contextual-create";
   import MdiBarcode from "~icons/mdi/barcode";
   import MdiBarcodeScan from "~icons/mdi/barcode-scan";
   import MdiPackageVariant from "~icons/mdi/package-variant";
@@ -282,6 +295,12 @@
 
   const locationsStore = useLocationStore();
   const locations = computed(() => locationsStore.allLocations);
+  const pinnedLocationId = ref("");
+  const contextualActive = ref(false);
+  const contextualCollectionId = ref("");
+  const contextualRootId = ref("");
+  const contextualBranchId = ref("");
+  const contextualSourceId = ref("");
 
   const tagStore = useTagStore();
   const tags = computed(() => tagStore.tags);
@@ -345,7 +364,7 @@
         form.quantity = data.defaultQuantity;
         if (data.defaultName) form.name = data.defaultName;
         if (data.defaultDescription) form.description = data.defaultDescription;
-        if (data.defaultLocation) {
+        if (data.defaultLocation && !pinnedLocationId.value) {
           const found = locations.value.find(l => l.id === data.defaultLocation!.id);
           if (found) form.location = found;
         }
@@ -367,6 +386,15 @@
   // auto-applied from an entity type's default template). User selections win.
   const templateUserSelected = ref(false);
   const showTemplateDetails = ref(false);
+  function clearContextualCreate() {
+    pinnedLocationId.value = "";
+    contextualActive.value = false;
+    contextualCollectionId.value = "";
+    contextualRootId.value = "";
+    contextualBranchId.value = "";
+    contextualSourceId.value = "";
+  }
+
   const form = reactive({
     location: locations.value && locations.value.length > 0 ? locations.value[0] : ({} as EntityOut),
     parentId: null,
@@ -380,6 +408,18 @@
     tags: [] as string[],
     photos: [] as PhotoPreview[],
   });
+
+  function applyPinnedLocation() {
+    if (!pinnedLocationId.value) {
+      return false;
+    }
+    const found = locations.value.find(location => location.id === pinnedLocationId.value);
+    if (!found) {
+      return false;
+    }
+    form.location = found;
+    return true;
+  }
 
   async function handleTemplateSelected(template: EntityTemplateSummary | null) {
     if (!template) {
@@ -411,8 +451,9 @@
     if (data.defaultDescription) {
       form.description = data.defaultDescription;
     }
-    // Pre-fill location if template has one and current form doesn't
-    if (data.defaultLocation && !form.location?.id) {
+    // Pre-fill location if template has one and current form doesn't.
+    // An explicit filing place wins over a template default.
+    if (data.defaultLocation && !form.location?.id && !pinnedLocationId.value) {
       const found = locations.value.find(l => l.id === data.defaultLocation!.id);
       if (found) {
         form.location = found;
@@ -453,8 +494,8 @@
     if (data.defaultDescription) {
       form.description = data.defaultDescription;
     }
-    // Pre-fill location if template has one
-    if (data.defaultLocation) {
+    // Pre-fill location if template has one. A contextual destination stays put.
+    if (data.defaultLocation && !pinnedLocationId.value) {
       const found = locations.value.find(l => l.id === data.defaultLocation!.id);
       if (found) {
         form.location = found;
@@ -518,6 +559,25 @@
       let parentItemLocationId = null;
       parent.value = {};
       form.parentId = null;
+      clearContextualCreate();
+
+      if (params.baseType === "item" && params.contextualReturn && !params.subItem && params.destinationId) {
+        await locationsStore.refreshChildren();
+        const explicit = explicitCreateLocationId({
+          destinationId: params.destinationId,
+          collectionId: params.collectionId,
+          currentCollectionId: activeCollectionId(),
+          knownLocationIds: locationsStore.allLocations.map(location => location.id),
+        });
+        if (explicit) {
+          pinnedLocationId.value = explicit;
+          contextualActive.value = true;
+          contextualCollectionId.value = params.collectionId ?? "";
+          contextualRootId.value = params.rootLocationId ?? "";
+          contextualBranchId.value = params.branchId ?? "";
+          contextualSourceId.value = params.sourceItemId ?? "";
+        }
+      }
 
       if (params.baseType === "item") {
         selectedEntityType.value = entityTypes.value.find(t => !t.isLocation) || null;
@@ -573,12 +633,13 @@
 
       const locId = locationId.value ? locationId.value : parentItemLocationId;
 
-      if (locId) {
+      if (locId && !pinnedLocationId.value) {
         const found = locations.value.find(l => l.id === locId);
         if (found) {
           form.location = found;
         }
       }
+      applyPinnedLocation();
 
       if (tagId.value) {
         form.tags = tags.value.filter(l => l.id === tagId.value).map(l => l.id);
@@ -719,12 +780,20 @@
     loading.value = false;
 
     if (close) {
-      closeDialog(DialogID.CreateEntity);
-      if (selectedEntityType.value?.isLocation) {
-        navigateTo(`/location/${data.id}`);
+      if (contextualActive.value) {
+        notifyContextualItemCreated();
+        closeDialog(DialogID.CreateEntity, { created: true, id: data.id, contextual: true });
       } else {
-        navigateTo(`/item/${data.id}`);
+        closeDialog(DialogID.CreateEntity, { created: true, id: data.id, contextual: false });
+        if (selectedEntityType.value?.isLocation) {
+          navigateTo(`/location/${data.id}`);
+        } else {
+          navigateTo(`/item/${data.id}`);
+        }
       }
+    } else if (contextualActive.value) {
+      notifyContextualItemCreated();
+      applyPinnedLocation();
     } else if (!selectedEntityType.value?.isLocation) {
       // "Create and Add Another" keeps the dialog open, so the open-dialog
       // callback (which normally restores the persisted template) never

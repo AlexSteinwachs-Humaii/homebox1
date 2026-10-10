@@ -27,6 +27,8 @@
     type LocationWalk,
   } from "~~/lib/location-browse";
   import { acceptInventoryNavigation, emptyInventoryContext, type InventoryContext } from "~~/lib/inventory-context";
+  import { buildLocationAddContext } from "~~/lib/location-add";
+  import { onContextualItemCreated } from "~~/lib/contextual-create";
   import {
     canonicalLocationId,
     classifySourcePath,
@@ -66,6 +68,8 @@
 
   /** undefined follows the validated hint. null is an explicit whole-room choice. */
   const userBranch = ref<string | null | undefined>(undefined);
+  /** undefined follows a verified exact shelf. null means the user cleared it. */
+  const userDestination = ref<string | null | undefined>(undefined);
   const sourceProbe = ref<SourceProbe>({ status: "absent" });
   const indexStatus = ref<"loading" | "ready" | "error">("loading");
   const locationIndex = ref<LocationRef[]>([]);
@@ -125,6 +129,32 @@
       ? destination
       : null;
   });
+  const filingScopeId = computed(() => activeChild.value ?? props.location.id);
+  const exactShelfId = computed(() => {
+    if (userDestination.value === null) {
+      return null;
+    }
+    const candidate = userDestination.value ?? visibleDestinationId.value;
+    if (!candidate) {
+      return null;
+    }
+    const known = canonicalLocationId(candidate, locationIndex.value);
+    if (!known || known === filingScopeId.value) {
+      return null;
+    }
+    return locationInScope(known, filingScopeId.value, locationIndex.value) ? known : null;
+  });
+  const addContext = computed(() =>
+    buildLocationAddContext({
+      collectionId: props.collectionId,
+      roomId: props.location.id,
+      branchId: activeChild.value,
+      exactDestinationId: exactShelfId.value,
+      sourceItemId: highlightedSourceId.value,
+      locations: locationIndex.value,
+    })
+  );
+  const addReady = computed(() => !resolvedSource.value.pending && addContext.value != null);
   const ancestors = computed(() => ancestorLocations(props.location.id, locationIndex.value));
   const displayWalk = computed(() => (activeChild.value ? childWalk.value : roomWalk.value));
   const displayPhase = computed(() => (activeChild.value ? childPhase.value : roomPhase.value));
@@ -400,6 +430,7 @@
     () => [props.location.id, props.collectionId] as const,
     () => {
       userBranch.value = undefined;
+      userDestination.value = undefined;
       sourceToken += 1;
       sourceProbe.value = { status: "absent" };
       void loadIndexAndRoom();
@@ -415,8 +446,10 @@
     userBranch.value = next;
     const hintedBranch = canonicalLocationId(hint.value.branchId, locationIndex.value);
     if (hintedBranch && next && hintedBranch === next) {
+      userDestination.value = undefined;
       return;
     }
+    userDestination.value = null;
     const scope = next ?? props.location.id;
     const nearest = sourceProbe.value.status === "found" ? sourceProbe.value.nearestLocationId : null;
     const keepSource = sourceProbe.value.status === "found" && locationInScope(nearest, scope, locationIndex.value);
@@ -442,11 +475,26 @@
     }
   }
 
-  function addHere() {
-    // Destination and return context are story 3. This opens the existing dialog
-    // and does not guess a shelf.
-    launchAddItem();
+  function selectShelf(id: string) {
+    const known = canonicalLocationId(id, locationIndex.value);
+    if (!known || known === filingScopeId.value || !locationInScope(known, filingScopeId.value, locationIndex.value)) {
+      return;
+    }
+    userDestination.value = exactShelfId.value === known ? null : known;
   }
+
+  function addHere() {
+    const context = addContext.value;
+    if (!addReady.value || !context) {
+      return;
+    }
+    launchAddItem(context);
+  }
+
+  const stopContextualRefresh = onContextualItemCreated(() => {
+    void loadIndexAndRoom();
+  });
+  onUnmounted(stopContextualRefresh);
 
   function goToEdit() {
     navigateTo(`/location/${props.location.id}/edit`);
@@ -543,6 +591,12 @@
     :data-destination-id="visibleDestinationId ?? ''"
     :data-source-item-id="highlightedSourceId ?? ''"
     :data-source-state="highlightedSourceId ? 'opened' : resolvedSource.pending ? 'pending' : 'none'"
+    :data-filing-destination="addContext?.destinationId ?? ''"
+    :data-filing-exact="exactShelfId ? 'true' : 'false'"
+    :data-filing-collection="addContext?.collectionId ?? ''"
+    :data-filing-root="addContext?.rootLocationId ?? ''"
+    :data-filing-branch="addContext?.branchId ?? ''"
+    :data-filing-source="addContext?.sourceItemId ?? ''"
   >
     <Title>{{ location.name }}</Title>
 
@@ -596,7 +650,7 @@
           </template>
         </p>
       </div>
-      <Button class="rounded-full" data-testid="add-item-here" @click="addHere">
+      <Button class="rounded-full" data-testid="add-item-here" :disabled="!addReady" @click="addHere">
         <MdiPlus />
         {{ $t("purrfect.place_add_here") }}
       </Button>
@@ -696,6 +750,9 @@
         :groups="displayGroups"
         :partial-items="displayItems"
         :opened-item-id="highlightedSourceId"
+        :selected-destination-id="exactShelfId"
+        :scope-id="filingScopeId"
+        @select-shelf="selectShelf"
       />
       <Button
         v-if="dataState === 'partial'"

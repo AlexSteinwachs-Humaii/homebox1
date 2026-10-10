@@ -813,6 +813,8 @@
         "location_path": "Location",
         "place_add_here": "Add item here",
         "place_empty": "Nothing is stored here.",
+        "place_file_here": "File here",
+        "place_filing": "Filing here",
         "place_empty_named": "Nothing is stored in {place}.",
         "place_error": "Belongings in this place could not be loaded.",
         "place_load_more": "Load more",

@@ -508,6 +508,8 @@ export function containingLocationId(itemId: string, locations: LocationRef[], i
 export type ShelfGroup = {
   id: string;
   label: string;
+  /** Deepest location in the group. Not a guessed shelf, and not an item container. */
+  destinationId: string | null;
   items: Array<
     BrowseRecord & {
       placeLabel: string;
@@ -574,11 +576,12 @@ export function groupBelongings(
     const placeLabel = placeNodes.map(node => node.name).join(PLACE_SEPARATOR);
 
     const row = { ...item, placeLabel };
+    const destinationId = groupNodes.length > 0 ? (groupNodes[groupNodes.length - 1]?.id ?? null) : null;
     const existing = groups.get(groupId);
     if (existing) {
       existing.items.push(row);
     } else {
-      groups.set(groupId, { id: groupId, label: groupLabel, items: [row] });
+      groups.set(groupId, { id: groupId, label: groupLabel, destinationId, items: [row] });
     }
   }
 

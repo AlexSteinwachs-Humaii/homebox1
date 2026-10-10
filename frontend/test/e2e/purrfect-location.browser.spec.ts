@@ -634,3 +634,171 @@ test("a late source lookup cannot restore context after the room changes", async
   await expect(page.locator(`[data-item-id='${LAMP_SOURCE}']`)).toHaveCount(0);
   await expect(page.getByTestId("location-item-opened")).toHaveCount(0);
 });
+
+async function openAddHere(page: Page) {
+  await page.getByTestId("add-item-here").click();
+  const form = page.getByTestId("create-entity-form");
+  await expect(form).toBeVisible();
+  return form;
+}
+
+async function closeCreate(page: Page) {
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByTestId("create-entity-form")).toHaveCount(0);
+}
+
+test("add item here carries the chosen place and does not guess a shelf", async ({ page }) => {
+  test.setTimeout(120_000);
+  const queries: ParentQuery[] = [];
+  await login(page);
+  await choosePurrfect(page);
+  await installRoutes(page, queries);
+
+  await page.goto(`/location/${LOFT}`);
+  const loft = page.getByTestId("purrfect-location");
+  await expect(loft).toHaveAttribute("data-state", "empty", { timeout: 30_000 });
+  await expect(loft).toHaveAttribute("data-filing-destination", LOFT);
+  await expect(loft).toHaveAttribute("data-filing-exact", "false");
+  await expect(loft).toHaveAttribute("data-filing-root", LOFT);
+  await expect(loft).toHaveAttribute("data-filing-branch", "");
+  await expect(page.getByTestId("location-shelf-choice")).toHaveCount(0);
+  const loftCollection = await loft.getAttribute("data-filing-collection");
+  expect(loftCollection).toBeTruthy();
+  expect(loftCollection).not.toBe(OTHER_COLLECTION);
+
+  const loftForm = await openAddHere(page);
+  await expect(loftForm).toHaveAttribute("data-contextual", "true");
+  await expect(loftForm).toHaveAttribute("data-destination-id", LOFT);
+  await expect(loftForm).toHaveAttribute("data-root-id", LOFT);
+  await expect(loftForm).toHaveAttribute("data-branch-id", "");
+  await expect(loftForm).toHaveAttribute("data-collection-id", loftCollection!);
+  await expect(loftForm).toHaveAttribute("data-source-item-id", "");
+  await closeCreate(page);
+  await expect(page).toHaveURL(new RegExp(`/location/${LOFT}$`));
+
+  await page.goto(`/location/${ANNEX}`);
+  const annex = page.getByTestId("purrfect-location");
+  await expect(annex).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  await expect(annex).toHaveAttribute("data-filing-destination", ANNEX);
+  await expect(annex).toHaveAttribute("data-filing-exact", "false");
+  await page.locator(`[data-place-id='${PAINT}']`).click();
+  await expect(annex).toHaveAttribute("data-filing-destination", PAINT);
+  await expect(annex).toHaveAttribute("data-filing-exact", "false");
+  await expect(annex).toHaveAttribute("data-filing-branch", PAINT);
+  await expect(page.locator(`[data-testid='location-shelf-choice'][data-selected='true']`)).toHaveCount(0);
+
+  const branchForm = await openAddHere(page);
+  await expect(branchForm).toHaveAttribute("data-destination-id", PAINT);
+  await expect(branchForm).toHaveAttribute("data-root-id", ANNEX);
+  await expect(branchForm).toHaveAttribute("data-branch-id", PAINT);
+  await expect(branchForm).not.toHaveAttribute("data-destination-id", BIN);
+  await expect(branchForm).not.toHaveAttribute("data-destination-id", RACK);
+  await closeCreate(page);
+
+  await page.locator(`[data-testid='location-shelf-choice'][data-destination-id='${BIN}']`).click();
+  await expect(annex).toHaveAttribute("data-filing-destination", BIN);
+  await expect(annex).toHaveAttribute("data-filing-exact", "true");
+  await expect(annex).toHaveAttribute("data-branch-id", PAINT);
+  await expect(page.locator(`[data-testid='location-shelf-choice'][data-destination-id='${BIN}']`)).toHaveAttribute(
+    "data-selected",
+    "true"
+  );
+  const shelfForm = await openAddHere(page);
+  await expect(shelfForm).toHaveAttribute("data-destination-id", BIN);
+  await expect(shelfForm).toHaveAttribute("data-contextual", "true");
+  await closeCreate(page);
+  await page.locator(`[data-place-id='${SPARE}']`).click();
+  await expect(annex).toHaveAttribute("data-filing-destination", SPARE);
+  await expect(annex).toHaveAttribute("data-filing-exact", "false");
+  await expect(annex).not.toHaveAttribute("data-filing-destination", BIN);
+
+  await page.goto(`/location/${LOFT}`);
+  await expect(page.getByTestId("purrfect-location")).toHaveAttribute("data-location-id", LOFT, {
+    timeout: 30_000,
+  });
+  const href = contextHref(ANNEX, {
+    branchId: PAINT,
+    destinationId: BIN,
+    sourceItemId: LAMP_SOURCE,
+  });
+  await page.goto(href);
+  await expect(annex).toHaveAttribute("data-source-state", "opened", { timeout: 30_000 });
+  await expect(annex).toHaveAttribute("data-filing-destination", BIN);
+  await expect(annex).toHaveAttribute("data-filing-exact", "true");
+  await expect(annex).toHaveAttribute("data-filing-branch", PAINT);
+  await expect(annex).toHaveAttribute("data-filing-source", LAMP_SOURCE);
+  await expect(annex).toHaveAttribute("data-filing-root", ANNEX);
+  const handoffForm = await openAddHere(page);
+  await expect(handoffForm).toHaveAttribute("data-destination-id", BIN);
+  await expect(handoffForm).toHaveAttribute("data-root-id", ANNEX);
+  await expect(handoffForm).toHaveAttribute("data-branch-id", PAINT);
+  await expect(handoffForm).toHaveAttribute("data-source-item-id", LAMP_SOURCE);
+  await expect(handoffForm).toHaveAttribute("data-collection-id", loftCollection!);
+  const kept = page.url();
+  await closeCreate(page);
+  await expect(page).toHaveURL(kept);
+  await expect(annex).toHaveAttribute("data-source-state", "opened");
+  await expect(annex).toHaveAttribute("data-branch-id", PAINT);
+  await expect(annex).toHaveAttribute("data-filing-destination", BIN);
+  await expect(page).not.toHaveURL(/return|redirect|next=/i);
+
+  await page.goto(
+    `/location/${ANNEX}?collectionId=${OTHER_COLLECTION}&branchId=${PAINT}&destinationId=${BIN}&sourceItemId=${LAMP_SOURCE}`
+  );
+  await expect(annex).toHaveAttribute("data-source-state", "none", { timeout: 30_000 });
+  await expect(annex).toHaveAttribute("data-filing-destination", ANNEX);
+  await expect(annex).toHaveAttribute("data-filing-exact", "false");
+  await expect(annex).not.toHaveAttribute("data-filing-collection", OTHER_COLLECTION);
+  await expect(page).not.toHaveURL(new RegExp(OTHER_COLLECTION));
+  const mismatch = await openAddHere(page);
+  await expect(mismatch).toHaveAttribute("data-destination-id", ANNEX);
+  await expect(mismatch).not.toHaveAttribute("data-destination-id", BIN);
+  await expect(mismatch).not.toHaveAttribute("data-collection-id", OTHER_COLLECTION);
+  await closeCreate(page);
+
+  await page.getByTestId("purrfect-add-item").click();
+  const globalForm = page.getByTestId("create-entity-form");
+  await expect(globalForm).toBeVisible();
+  await expect(globalForm).toHaveAttribute("data-contextual", "false");
+  await expect(globalForm).toHaveAttribute("data-collection-id", "");
+  await closeCreate(page);
+});
+
+test("contextual create stays on the location and refreshes its list", async ({ page }) => {
+  test.setTimeout(120_000);
+  const queries: ParentQuery[] = [];
+  const creates: Array<{ parentId?: string; name?: string }> = [];
+  await login(page);
+  await choosePurrfect(page);
+  await installRoutes(page, queries);
+  await page.route("**/api/v1/entities**", async route => {
+    if (route.request().method() !== "POST" || route.request().url().includes("/attachments")) {
+      await route.fallback();
+      return;
+    }
+    const body = route.request().postDataJSON() as { parentId?: string; name?: string };
+    creates.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", name: body.name ?? "Created" }),
+    });
+  });
+
+  await page.goto(`/location/${LOFT}`);
+  const loft = page.getByTestId("purrfect-location");
+  await expect(loft).toHaveAttribute("data-filing-destination", LOFT, { timeout: 30_000 });
+  const before = queries.length;
+  const form = await openAddHere(page);
+  await expect(form).toHaveAttribute("data-destination-id", LOFT);
+  await form.locator("input").first().fill("Loose mat");
+  await form.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByTestId("create-entity-form")).toHaveCount(0, { timeout: 20_000 });
+  await expect(page).toHaveURL(new RegExp(`/location/${LOFT}`));
+  await expect(page).not.toHaveURL(/\/item\//);
+  expect(creates).toHaveLength(1);
+  expect(creates[0]?.parentId).toBe(LOFT);
+  await expect.poll(() => queries.length).toBeGreaterThan(before);
+  await expect(loft).toHaveAttribute("data-location-id", LOFT);
+  await expect(loft).toHaveAttribute("data-filing-destination", LOFT);
+});
