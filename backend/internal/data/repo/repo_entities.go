@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -100,6 +101,14 @@ type (
 		// barcode product-search import flow (#1578).
 		ModelNumber  string `json:"modelNumber"  validate:"max=255" extensions:"x-nullable,x-omitempty"`
 		Manufacturer string `json:"manufacturer" validate:"max=255" extensions:"x-nullable,x-omitempty"`
+
+		// Purchase and insurance are optional. Nil (omitted or JSON null) keeps
+		// the column defaults (price 0, empty vendor, not insured) so existing
+		// clients keep working. Explicit values, including false and 0, are
+		// written in the same insert as the rest of the entity.
+		PurchaseFrom  *string  `json:"purchaseFrom"  validate:"omitempty,max=255" extensions:"x-nullable,x-omitempty"`
+		PurchasePrice *float64 `json:"purchasePrice"                               extensions:"x-nullable,x-omitempty"`
+		Insured       *bool    `json:"insured"                                      extensions:"x-nullable,x-omitempty"`
 
 		// Edges
 		TagIDs []uuid.UUID `json:"tagIds"`
@@ -1039,6 +1048,44 @@ func validateQuantity(op string, quantity float64) error {
 	return nil
 }
 
+// maxPurchaseFromLen matches the update request's validate:"max=255" and the
+// other identification strings. The column itself is unbounded text, so the
+// check has to happen before the insert.
+const maxPurchaseFromLen = 255
+
+// validatePurchase rejects values that must not be stored. Price may be zero
+// or negative — edit does not impose a currency range — but it must be finite.
+// from is measured in runes so it agrees with the HTTP max=255 tag.
+// ResolvePurchase applies omission defaults. A nil pointer keeps
+// defaultInsured and the zero purchase values; a non-nil pointer, including
+// false, 0 and "", is an explicit value.
+func ResolvePurchase(price *float64, from *string, insured *bool, defaultInsured bool) (float64, string, bool) {
+	resolvedPrice := 0.0
+	if price != nil {
+		resolvedPrice = *price
+	}
+	resolvedFrom := ""
+	if from != nil {
+		resolvedFrom = *from
+	}
+	resolvedInsured := defaultInsured
+	if insured != nil {
+		resolvedInsured = *insured
+	}
+	return resolvedPrice, resolvedFrom, resolvedInsured
+}
+
+func validatePurchase(op string, price float64, from string) error {
+	if math.IsNaN(price) || math.IsInf(price, 0) {
+		return fmt.Errorf("%s: invalid purchase price: must be a finite number", op)
+	}
+	if utf8.RuneCountInString(from) > maxPurchaseFromLen {
+		return fmt.Errorf("%s: invalid purchase from: must be at most %d characters", op, maxPurchaseFromLen)
+	}
+
+	return nil
+}
+
 func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data EntityCreate) (EntityOut, error) {
 	ctx, span := entityTracer().Start(ctx, "repo.EntityRepository.Create",
 		trace.WithAttributes(
@@ -1053,6 +1100,11 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 	defer span.End()
 
 	if err := validateQuantity("create entity", data.Quantity); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	price, from, insured := ResolvePurchase(data.PurchasePrice, data.PurchaseFrom, data.Insured, false)
+	if err := validatePurchase("create entity", price, from); err != nil {
 		recordSpanError(span, err)
 		return EntityOut{}, err
 	}
@@ -1081,6 +1133,9 @@ func (r *EntityRepository) Create(ctx context.Context, gid uuid.UUID, data Entit
 		SetDescription(data.Description).
 		SetModelNumber(data.ModelNumber).
 		SetManufacturer(data.Manufacturer).
+		SetPurchaseFrom(from).
+		SetPurchasePrice(price).
+		SetInsured(insured).
 		SetGroupID(gid).
 		SetAssetID(int64(data.AssetID))
 
@@ -1130,6 +1185,8 @@ type EntityCreateFromTemplate struct {
 	ParentID         uuid.UUID
 	EntityTypeID     uuid.UUID
 	Insured          bool
+	PurchasePrice    float64
+	PurchaseFrom     string
 	LifetimeWarranty bool
 }
 
@@ -1148,6 +1205,10 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 	defer span.End()
 
 	if err := validateQuantity("create entity from template", data.Quantity); err != nil {
+		recordSpanError(span, err)
+		return EntityOut{}, err
+	}
+	if err := validatePurchase("create entity from template", data.PurchasePrice, data.PurchaseFrom); err != nil {
 		recordSpanError(span, err)
 		return EntityOut{}, err
 	}
@@ -1215,6 +1276,8 @@ func (r *EntityRepository) CreateFromTemplate(ctx context.Context, gid uuid.UUID
 		SetGroupID(gid).
 		SetAssetID(int64(nextAssetID)).
 		SetInsured(data.Insured).
+		SetPurchasePrice(data.PurchasePrice).
+		SetPurchaseFrom(data.PurchaseFrom).
 		SetManufacturer(data.Manufacturer).
 		SetModelNumber(data.ModelNumber).
 		SetLifetimeWarranty(data.LifetimeWarranty).

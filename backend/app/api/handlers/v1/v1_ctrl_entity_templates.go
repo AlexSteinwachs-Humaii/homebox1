@@ -112,6 +112,20 @@ type EntityTemplateCreateItemRequest struct {
 	EntityTypeID uuid.UUID   `json:"entityTypeId"`
 	TagIDs       []uuid.UUID `json:"tagIds"`
 	Quantity     *float64    `json:"quantity"`
+	// PurchasePrice, PurchaseFrom and Insured are explicit overrides. Nil
+	// (omitted or JSON null) keeps the template default for insured, and the
+	// zero purchase defaults — templates do not store a price or vendor.
+	// An explicit false overrides a true template insured default.
+	PurchasePrice *float64 `json:"purchasePrice" extensions:"x-nullable,x-omitempty"`
+	PurchaseFrom  *string  `json:"purchaseFrom"  validate:"omitempty,max=255"       extensions:"x-nullable,x-omitempty"`
+	Insured       *bool    `json:"insured"       extensions:"x-nullable,x-omitempty"`
+}
+
+// templatePurchaseOverrides resolves create-from-template purchase and
+// insurance fields. Omission keeps templateInsured (and zero purchase
+// defaults); a non-nil value, including false and 0, replaces the default.
+func templatePurchaseOverrides(body EntityTemplateCreateItemRequest, templateInsured bool) (float64, string, bool) {
+	return repo.ResolvePurchase(body.PurchasePrice, body.PurchaseFrom, body.Insured, templateInsured)
 }
 
 // HandleEntityTemplatesCreateItem godoc
@@ -149,7 +163,11 @@ func (ctrl *V1Controller) HandleEntityTemplatesCreateItem() errchain.HandlerFunc
 			}
 		})
 
-		// Create entity with all template data in a single transaction
+		price, from, insured := templatePurchaseOverrides(body, template.DefaultInsured)
+
+		// Create entity with all template data in a single transaction.
+		// Warranty, manufacturer and custom fields still come from the template
+		// unless a later story adds overrides for them.
 		return ctrl.repo.Entities.CreateFromTemplate(r.Context(), auth.GID, repo.EntityCreateFromTemplate{
 			Name:             body.Name,
 			Description:      body.Description,
@@ -157,7 +175,9 @@ func (ctrl *V1Controller) HandleEntityTemplatesCreateItem() errchain.HandlerFunc
 			ParentID:         body.ParentID,
 			EntityTypeID:     body.EntityTypeID,
 			TagIDs:           body.TagIDs,
-			Insured:          template.DefaultInsured,
+			Insured:          insured,
+			PurchasePrice:    price,
+			PurchaseFrom:     from,
 			Manufacturer:     template.DefaultManufacturer,
 			ModelNumber:      template.DefaultModelNumber,
 			LifetimeWarranty: template.DefaultLifetimeWarranty,

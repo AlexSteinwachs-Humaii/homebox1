@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/sysadminsmedia/homebox/backend/internal/data/ent"
 )
 
 // TestEntityRepository_UpdateByGroup_CrossTenantLeak guards against a cross-tenant
@@ -125,4 +126,108 @@ func TestEntityRepository_UpdateByGroup_CrossTenantFieldWrite(t *testing.T) {
 	require.Len(t, after.Fields, 1, "victim's custom fields must not be deleted or added to")
 	assert.Equal(t, fieldName, after.Fields[0].Name)
 	assert.Equal(t, fieldValue, after.Fields[0].TextValue, "victim's field value must not be tampered with")
+}
+
+// TestEntityRepository_Create_CrossTenantReferencesRejectedBeforeWrite guards
+// the purchase/insurance create path: a foreign parent, type or tag must fail
+// before any inventory row is inserted, even when the body also carries
+// purchase price, vendor and insured.
+func TestEntityRepository_Create_CrossTenantReferencesRejectedBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+
+	victimGroup, err := tRepos.Groups.GroupCreate(ctx, "victim-group-create-purchase", uuid.Nil)
+	require.NoError(t, err)
+
+	victimET, err := tRepos.EntityTypes.GetDefault(ctx, victimGroup.ID, false)
+	require.NoError(t, err)
+	victimParent, err := tRepos.Entities.Create(ctx, victimGroup.ID, EntityCreate{
+		Name:         "victim-parent",
+		EntityTypeID: victimET.ID,
+	})
+	require.NoError(t, err)
+	victimTag, err := tRepos.Tags.Create(ctx, victimGroup.ID, TagCreate{Name: "victim-tag"})
+	require.NoError(t, err)
+
+	ownET, err := tRepos.EntityTypes.GetDefault(ctx, tGroup.ID, false)
+	require.NoError(t, err)
+
+	before, err := tRepos.Entities.GetAll(ctx, tGroup.ID)
+	require.NoError(t, err)
+
+	price := 16.0
+	from := "should-not-land"
+	insured := true
+	cases := []EntityCreate{
+		{
+			Name:          "cross-tenant-parent",
+			EntityTypeID:  ownET.ID,
+			ParentID:      victimParent.ID,
+			PurchasePrice: &price,
+			PurchaseFrom:  &from,
+			Insured:       &insured,
+		},
+		{
+			Name:          "cross-tenant-type",
+			EntityTypeID:  victimET.ID,
+			PurchasePrice: &price,
+			PurchaseFrom:  &from,
+			Insured:       &insured,
+		},
+		{
+			Name:          "cross-tenant-tag",
+			EntityTypeID:  ownET.ID,
+			TagIDs:        []uuid.UUID{victimTag.ID},
+			PurchasePrice: &price,
+			PurchaseFrom:  &from,
+			Insured:       &insured,
+		},
+	}
+
+	for _, data := range cases {
+		_, err = tRepos.Entities.Create(ctx, tGroup.ID, data)
+		require.Error(t, err)
+		assert.True(t, ent.IsNotFound(err), "expected not-found for %s, got %v", data.Name, err)
+	}
+
+	after, err := tRepos.Entities.GetAll(ctx, tGroup.ID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "rejected creates must not insert inventory rows")
+
+	stillThere, err := tRepos.Entities.GetOneByGroup(ctx, victimGroup.ID, victimParent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "victim-parent", stillThere.Name)
+	assert.Empty(t, stillThere.PurchaseFrom)
+	assert.False(t, stillThere.Insured)
+}
+
+func TestEntityRepository_CreateFromTemplate_CrossTenantParentRejectedBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+
+	victimGroup, err := tRepos.Groups.GroupCreate(ctx, "victim-group-template-parent", uuid.Nil)
+	require.NoError(t, err)
+	victimET, err := tRepos.EntityTypes.GetDefault(ctx, victimGroup.ID, true)
+	require.NoError(t, err)
+	victimParent, err := tRepos.Entities.Create(ctx, victimGroup.ID, EntityCreate{
+		Name:         "victim-location",
+		EntityTypeID: victimET.ID,
+	})
+	require.NoError(t, err)
+
+	before, err := tRepos.Entities.GetAll(ctx, tGroup.ID)
+	require.NoError(t, err)
+
+	_, err = tRepos.Entities.CreateFromTemplate(ctx, tGroup.ID, EntityCreateFromTemplate{
+		Name:          "template-cross-tenant",
+		Quantity:      1.25,
+		ParentID:      victimParent.ID,
+		PurchasePrice: 4,
+		PurchaseFrom:  "nope",
+		Insured:       true,
+	})
+	require.Error(t, err)
+	assert.True(t, ent.IsNotFound(err))
+
+	after, err := tRepos.Entities.GetAll(ctx, tGroup.ID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before))
 }

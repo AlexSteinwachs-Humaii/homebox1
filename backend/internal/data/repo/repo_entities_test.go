@@ -201,6 +201,124 @@ func TestEntityRepository_Create_WithFractionalQuantity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEntityRepository_Create_PersistsPurchaseAndInsurance(t *testing.T) {
+	containerET := useContainerEntityType(t)
+	itemET := useItemEntityType(t)
+
+	cf := containerFactory()
+	cf.EntityTypeID = containerET.ID
+	container, err := tRepos.Entities.Create(context.Background(), tGroup.ID, cf)
+	require.NoError(t, err)
+
+	tag, err := tRepos.Tags.Create(context.Background(), tGroup.ID, TagCreate{Name: fk.Str(8)})
+	require.NoError(t, err)
+
+	itm := entityFactory()
+	itm.ParentID = container.ID
+	itm.EntityTypeID = itemET.ID
+	itm.Quantity = 0.5
+	itm.PurchasePrice = new(16.5)
+	itm.PurchaseFrom = new("Chewy")
+	itm.Insured = new(true)
+	itm.TagIDs = []uuid.UUID{tag.ID}
+
+	result, err := tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.5, result.Quantity, 0.000001)
+	assert.InDelta(t, 16.5, result.PurchasePrice, 0.000001)
+	assert.Equal(t, "Chewy", result.PurchaseFrom)
+	assert.True(t, result.Insured)
+	require.Len(t, result.Tags, 1)
+	assert.Equal(t, tag.ID, result.Tags[0].ID)
+	require.NotNil(t, result.Parent)
+	assert.Equal(t, container.ID, result.Parent.ID)
+	require.NotNil(t, result.EntityType)
+	assert.Equal(t, itemET.ID, result.EntityType.ID)
+
+	fetched, err := tRepos.Entities.GetOne(context.Background(), result.ID)
+	require.NoError(t, err)
+	assert.Equal(t, itm.Name, fetched.Name)
+	assert.Equal(t, itm.Description, fetched.Description)
+	assert.InDelta(t, 16.5, fetched.PurchasePrice, 0.000001)
+	assert.Equal(t, "Chewy", fetched.PurchaseFrom)
+	assert.True(t, fetched.Insured)
+	assert.InDelta(t, 0.5, fetched.Quantity, 0.000001)
+
+	err = tRepos.Entities.Delete(context.Background(), result.ID)
+	require.NoError(t, err)
+	err = tRepos.Entities.Delete(context.Background(), container.ID)
+	require.NoError(t, err)
+	err = tRepos.Tags.DeleteByGroup(context.Background(), tGroup.ID, tag.ID)
+	require.NoError(t, err)
+}
+
+func TestEntityRepository_Create_OmitsPurchaseDefaults(t *testing.T) {
+	itemET := useItemEntityType(t)
+	itm := entityFactory()
+	itm.EntityTypeID = itemET.ID
+
+	result, err := tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.NoError(t, err)
+	assert.Zero(t, result.PurchasePrice)
+	assert.Empty(t, result.PurchaseFrom)
+	assert.False(t, result.Insured)
+
+	err = tRepos.Entities.Delete(context.Background(), result.ID)
+	require.NoError(t, err)
+}
+
+func TestEntityRepository_Create_AllowsNegativePurchasePrice(t *testing.T) {
+	itemET := useItemEntityType(t)
+	itm := entityFactory()
+	itm.EntityTypeID = itemET.ID
+	itm.PurchasePrice = new(-1.25)
+
+	result, err := tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.NoError(t, err)
+	assert.InDelta(t, -1.25, result.PurchasePrice, 0.000001)
+
+	err = tRepos.Entities.Delete(context.Background(), result.ID)
+	require.NoError(t, err)
+}
+
+func TestEntityRepository_Create_RejectsNonFinitePurchasePrice(t *testing.T) {
+	itemET := useItemEntityType(t)
+	before, err := tRepos.Entities.GetAll(context.Background(), tGroup.ID)
+	require.NoError(t, err)
+
+	for _, price := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		itm := entityFactory()
+		itm.EntityTypeID = itemET.ID
+		itm.PurchasePrice = &price
+
+		_, err = tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid purchase price: must be a finite number")
+	}
+
+	after, err := tRepos.Entities.GetAll(context.Background(), tGroup.ID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before))
+}
+
+func TestEntityRepository_Create_RejectsLongPurchaseFrom(t *testing.T) {
+	itemET := useItemEntityType(t)
+	before, err := tRepos.Entities.GetAll(context.Background(), tGroup.ID)
+	require.NoError(t, err)
+
+	itm := entityFactory()
+	itm.EntityTypeID = itemET.ID
+	itm.PurchaseFrom = new(strings.Repeat("é", 256))
+
+	_, err = tRepos.Entities.Create(context.Background(), tGroup.ID, itm)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid purchase from: must be at most 255 characters")
+
+	after, err := tRepos.Entities.GetAll(context.Background(), tGroup.ID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before))
+}
+
 func TestEntityRepository_Create_RejectsNonFiniteQuantity(t *testing.T) {
 	containerET := useContainerEntityType(t)
 	itemET := useItemEntityType(t)
@@ -426,6 +544,108 @@ func TestEntityRepository_Patch_RejectsNonFiniteQuantity(t *testing.T) {
 	err := tRepos.Entities.Patch(context.Background(), tGroup.ID, e.ID, EntityPatch{Quantity: &quantity})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid quantity: must be a finite number")
+}
+
+func TestEntityRepository_CreateFromTemplate_PersistsPurchaseAndInsurance(t *testing.T) {
+	containerET := useContainerEntityType(t)
+
+	cf := containerFactory()
+	cf.EntityTypeID = containerET.ID
+	container, err := tRepos.Entities.Create(context.Background(), tGroup.ID, cf)
+	require.NoError(t, err)
+
+	out, err := tRepos.Entities.CreateFromTemplate(context.Background(), tGroup.ID, EntityCreateFromTemplate{
+		Name:             fk.Str(10),
+		Description:      fk.Str(20),
+		Quantity:         1.5,
+		ParentID:         container.ID,
+		Insured:          false,
+		PurchasePrice:    9.99,
+		PurchaseFrom:     "Vet shop",
+		Manufacturer:     "Acme",
+		LifetimeWarranty: true,
+		WarrantyDetails:  "covered",
+		Fields: []EntityFieldData{
+			{Name: "color", Type: "text", TextValue: "grey"},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, out.Insured)
+	assert.InDelta(t, 9.99, out.PurchasePrice, 0.000001)
+	assert.Equal(t, "Vet shop", out.PurchaseFrom)
+	assert.InDelta(t, 1.5, out.Quantity, 0.000001)
+	assert.Equal(t, "Acme", out.Manufacturer)
+	assert.True(t, out.LifetimeWarranty)
+	assert.Equal(t, "covered", out.WarrantyDetails)
+	require.Len(t, out.Fields, 1)
+	assert.Equal(t, "color", out.Fields[0].Name)
+
+	fetched, err := tRepos.Entities.GetOne(context.Background(), out.ID)
+	require.NoError(t, err)
+	assert.False(t, fetched.Insured)
+	assert.InDelta(t, 9.99, fetched.PurchasePrice, 0.000001)
+	assert.Equal(t, "Vet shop", fetched.PurchaseFrom)
+
+	err = tRepos.Entities.Delete(context.Background(), out.ID)
+	require.NoError(t, err)
+	err = tRepos.Entities.Delete(context.Background(), container.ID)
+	require.NoError(t, err)
+}
+
+func TestEntityRepository_CreateFromTemplate_OmitsPurchaseDefaults(t *testing.T) {
+	containerET := useContainerEntityType(t)
+
+	cf := containerFactory()
+	cf.EntityTypeID = containerET.ID
+	container, err := tRepos.Entities.Create(context.Background(), tGroup.ID, cf)
+	require.NoError(t, err)
+
+	out, err := tRepos.Entities.CreateFromTemplate(context.Background(), tGroup.ID, EntityCreateFromTemplate{
+		Name:        fk.Str(10),
+		Description: fk.Str(20),
+		Quantity:    1,
+		ParentID:    container.ID,
+		Insured:     true,
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Insured)
+	assert.Zero(t, out.PurchasePrice)
+	assert.Empty(t, out.PurchaseFrom)
+
+	err = tRepos.Entities.Delete(context.Background(), out.ID)
+	require.NoError(t, err)
+	err = tRepos.Entities.Delete(context.Background(), container.ID)
+	require.NoError(t, err)
+}
+
+func TestEntityRepository_CreateFromTemplate_RejectsNonFinitePurchasePrice(t *testing.T) {
+	containerET := useContainerEntityType(t)
+
+	cf := containerFactory()
+	cf.EntityTypeID = containerET.ID
+	container, err := tRepos.Entities.Create(context.Background(), tGroup.ID, cf)
+	require.NoError(t, err)
+
+	before, err := tRepos.Entities.GetAll(context.Background(), tGroup.ID)
+	require.NoError(t, err)
+
+	_, err = tRepos.Entities.CreateFromTemplate(context.Background(), tGroup.ID, EntityCreateFromTemplate{
+		Name:          fk.Str(10),
+		Quantity:      1,
+		ParentID:      container.ID,
+		PurchasePrice: math.NaN(),
+		PurchaseFrom:  "should-not-land",
+		Insured:       true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid purchase price: must be a finite number")
+
+	after, err := tRepos.Entities.GetAll(context.Background(), tGroup.ID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before))
+
+	err = tRepos.Entities.Delete(context.Background(), container.ID)
+	require.NoError(t, err)
 }
 
 func TestEntityRepository_CreateFromTemplate_RejectsNonFiniteQuantity(t *testing.T) {
