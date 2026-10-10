@@ -4794,6 +4794,11 @@ const docTemplate = `{
                 "entityTypeId": {
                     "type": "string"
                 },
+                "insured": {
+                    "type": "boolean",
+                    "x-nullable": true,
+                    "x-omitempty": true
+                },
                 "manufacturer": {
                     "type": "string",
                     "maxLength": 255,
@@ -4815,6 +4820,18 @@ const docTemplate = `{
                 "parentId": {
                     "type": "string",
                     "x-nullable": true
+                },
+                "purchaseFrom": {
+                    "description": "Purchase and insurance are optional. Nil (omitted or JSON null) keeps\nthe column defaults (price 0, empty vendor, not insured) so existing\nclients keep working. Explicit values, including false and 0, are\nwritten in the same insert as the rest of the entity.",
+                    "type": "string",
+                    "maxLength": 255,
+                    "x-nullable": true,
+                    "x-omitempty": true
+                },
+                "purchasePrice": {
+                    "type": "number",
+                    "x-nullable": true,
+                    "x-omitempty": true
                 },
                 "quantity": {
                     "type": "number"
@@ -4930,7 +4947,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "itemCount": {
-                    "description": "Container-specific (populated when querying locations)",
+                    "description": "ItemCount is set only after a location query has computed it.\nA pointer keeps a real zero in JSON and omits a count that was never\nloaded, so clients do not paint \"not loaded\" as zero.",
                     "type": "number"
                 },
                 "lifetimeWarranty": {
@@ -5120,7 +5137,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "itemCount": {
-                    "description": "Container-specific (populated when querying locations)",
+                    "description": "ItemCount is set only after a location query has computed it.\nA pointer keeps a real zero in JSON and omits a count that was never\nloaded, so clients do not paint \"not loaded\" as zero.",
                     "type": "number"
                 },
                 "name": {
@@ -6433,6 +6450,11 @@ const docTemplate = `{
                     "description": "EntityTypeID is the entity type selected by the user. When set it takes\nprecedence; when empty the repository falls back to the group's default.",
                     "type": "string"
                 },
+                "insured": {
+                    "type": "boolean",
+                    "x-nullable": true,
+                    "x-omitempty": true
+                },
                 "name": {
                     "type": "string",
                     "maxLength": 255,
@@ -6440,6 +6462,18 @@ const docTemplate = `{
                 },
                 "parentId": {
                     "type": "string"
+                },
+                "purchaseFrom": {
+                    "type": "string",
+                    "maxLength": 255,
+                    "x-nullable": true,
+                    "x-omitempty": true
+                },
+                "purchasePrice": {
+                    "description": "PurchasePrice, PurchaseFrom and Insured are explicit overrides. Nil\n(omitted or JSON null) keeps the template default for insured, and the\nzero purchase defaults — templates do not store a price or vendor.\nAn explicit false overrides a true template insured default.",
+                    "type": "number",
+                    "x-nullable": true,
+                    "x-omitempty": true
                 },
                 "quantity": {
                     "type": "number"

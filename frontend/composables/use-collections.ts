@@ -12,6 +12,18 @@ const collections = ref<CollectionSummary[]>([]);
 const selectedId = ref<string | null>(null);
 const refreshing = ref(false);
 
+/** The collection API calls should use. Preferences win until the selector has loaded. */
+export function activeCollectionId(): string | null {
+  if (selectedId.value) {
+    return selectedId.value;
+  }
+  try {
+    return useViewPreferences().value.collectionId ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export const useCollections = () => {
   const load = async () => {
     if (window.location.pathname === "/") {

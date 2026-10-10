@@ -1,9 +1,15 @@
 import { defineStore } from "pinia";
 import type { TagOut, TagSummary } from "~~/lib/api/types/data-contracts";
+import { activeCollectionId } from "~~/composables/use-collections";
+
+export type TagLoadStatus = "idle" | "loading" | "ready" | "error";
 
 export const useTagStore = defineStore("tags", {
   state: () => ({
     allTags: null as TagOut[] | null,
+    tagsStatus: "idle" as TagLoadStatus,
+    tagsGeneration: 0,
+    boundCollectionId: null as string | null,
     client: useUserApi(),
     refreshAllTagsPromise: null as Promise<void> | null,
   }),
@@ -28,13 +34,38 @@ export const useTagStore = defineStore("tags", {
       }
       await this.refreshAllTagsPromise;
     },
+    prepareForCollection(collectionId: string | null) {
+      if (this.boundCollectionId === collectionId && this.tagsStatus !== "idle") {
+        return;
+      }
+      this.boundCollectionId = collectionId;
+      this.tagsGeneration += 1;
+      this.allTags = null;
+      this.tagsStatus = "loading";
+      this.refreshAllTagsPromise = null;
+    },
     async refresh() {
-      const result = await this.client.tags.getAll();
-      if (result.error) {
+      const collectionId = activeCollectionId();
+      if (this.boundCollectionId !== collectionId) {
+        this.prepareForCollection(collectionId);
+      }
+      const generation = ++this.tagsGeneration;
+      if (this.allTags === null) {
+        this.tagsStatus = "loading";
+      }
+      const result = await useUserApi().tags.getAll();
+      if (generation !== this.tagsGeneration || activeCollectionId() !== collectionId) {
+        return result;
+      }
+      if (result.error || !Array.isArray(result.data)) {
+        this.allTags = null;
+        this.tagsStatus = "error";
         return result;
       }
 
       this.allTags = result.data;
+      this.tagsStatus = "ready";
+      this.boundCollectionId = collectionId;
       return result;
     },
     getAncestors(tags: string[]) {
