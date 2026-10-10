@@ -12,6 +12,7 @@ const BOWL = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2";
 const ITEM_TYPE = "cccccccc-cccc-4ccc-8ccc-ccccccccccc1";
 const TEMPLATE = "dddddddd-dddd-4ddd-8ddd-ddddddddddd1";
 const TAG = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1";
+const CREATED = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 
 function location(id: string, name: string, parentId: string | null) {
   return {
@@ -166,12 +167,38 @@ async function installApi(page: Page, options: { failShelf?: boolean; shelf?: Re
       await fulfill(route, { items: matched, page: 1, pageSize: 50, total: matched.length });
       return;
     }
+    if (method === "GET" && /\/entities\/[0-9a-f-]{36}$/i.test(path)) {
+      const id = path.split("/").pop() ?? "";
+      const found = locations.find(row => row.id === id);
+      if (found) {
+        await fulfill(route, {
+          ...found,
+          notes: "",
+          attachments: [],
+          fields: [],
+          children: [],
+        });
+        return;
+      }
+    }
     if (method === "POST" && path.endsWith("/entities")) {
-      await fulfill(route, { id: "ffffffff-ffff-4fff-8fff-ffffffffffff", name: "Created" });
+      await fulfill(route, { id: CREATED, name: "Created" });
       return;
     }
     await route.continue();
   });
+}
+
+async function fillBelonging(page: Page, name = "Washable mat") {
+  const form = page.getByTestId("create-entity-form");
+  await expect(form).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("purrfect-add-save")).toBeEnabled({ timeout: 30_000 });
+  await page.getByTestId("add-item-name").locator("input").fill(name);
+  await page.getByTestId("add-item-description").locator("textarea").fill("Sits in front of the carrier.");
+  await page.getByTestId("add-item-quantity").locator("input").fill("1.5");
+  await page.getByTestId("add-item-price").locator("input").fill("12.50");
+  await page.getByTestId("add-item-vendor").locator("input").fill("Corner shop");
+  return form;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -260,4 +287,212 @@ test("global add keeps a blank draft and still reaches barcode and location crea
   await page.keyboard.press("Escape");
   await page.getByTestId("add-advanced-barcode").click();
   await expect(page.getByRole("dialog")).toBeVisible();
+});
+
+test("cancel creates nothing and returns to the originating room", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  await choosePurrfect(page);
+  const posts: string[] = [];
+  await installApi(page);
+  await page.route("**/api/v1/entities", async route => {
+    if (route.request().method() === "POST") {
+      posts.push(route.request().postData() ?? "");
+    }
+    await route.fallback();
+  });
+  await page.goto(`/item/add?rootLocationId=${ROOM}&branchId=${BRANCH}&destinationId=${SHELF}`);
+  await fillBelonging(page);
+  await page.getByTestId("purrfect-add-cancel").click();
+  await expect(page).toHaveURL(new RegExp(`/location/${ROOM}`), { timeout: 30_000 });
+  const landed = new URL(page.url());
+  expect(landed.searchParams.get("rootLocationId")).toBe(ROOM);
+  expect(landed.searchParams.get("return")).toBeNull();
+  expect(posts).toEqual([]);
+});
+
+test("save sends one create and returns to the room with the shelf's records", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  await choosePurrfect(page);
+  const bodies: Array<Record<string, unknown>> = [];
+  await installApi(page);
+  await page.route("**/api/v1/entities", async route => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    bodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    await route.fallback();
+  });
+  await page.goto(`/item/add?rootLocationId=${ROOM}&branchId=${BRANCH}&destinationId=${SHELF}`);
+  await fillBelonging(page, "Washable mat");
+  await page.getByTestId("add-item-insured").click();
+  await page.evaluate(() => {
+    const form = document.querySelector("[data-testid='create-entity-form']") as HTMLFormElement | null;
+    form?.requestSubmit();
+    form?.requestSubmit();
+  });
+  await page.getByTestId("purrfect-add-save").click({ force: true });
+  await expect(page).toHaveURL(new RegExp(`/location/${ROOM}`), { timeout: 30_000 });
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]).toMatchObject({
+    name: "Washable mat",
+    description: "Sits in front of the carrier.",
+    quantity: 1.5,
+    purchasePrice: 12.5,
+    purchaseFrom: "Corner shop",
+    insured: true,
+    parentId: SHELF,
+    entityTypeId: ITEM_TYPE,
+  });
+  expect(JSON.stringify(bodies[0])).not.toContain("Litter mat");
+  const landed = new URL(page.url());
+  expect(landed.pathname).toBe(`/location/${ROOM}`);
+  expect(landed.pathname).not.toBe(`/location/${SHELF}`);
+  await expect(page.getByTestId("location-counts")).toBeVisible({ timeout: 30_000 });
+});
+
+test("a changed shelf is saved there, and the return stays the originating room", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  await choosePurrfect(page);
+  const bodies: Array<Record<string, unknown>> = [];
+  await installApi(page);
+  await page.route("**/api/v1/entities", async route => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    bodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fallback();
+  });
+  await page.goto(`/item/add?rootLocationId=${ROOM}&branchId=${BRANCH}&destinationId=${SHELF}`);
+  const form = await fillBelonging(page);
+  await page.getByTestId("add-item-change-location").click();
+  await form.getByRole("combobox").click();
+  await page.getByText("Spare bin", { exact: true }).click();
+  await expect(form).toHaveAttribute("data-destination-id", OTHER);
+  await page.getByTestId("purrfect-add-save").click();
+  await expect(page).toHaveURL(new RegExp(`/location/${ROOM}`), { timeout: 30_000 });
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]?.parentId).toBe(OTHER);
+  expect(new URL(page.url()).pathname).toBe(`/location/${ROOM}`);
+  expect(new URL(page.url()).searchParams.get("destinationId")).toBe(OTHER);
+});
+
+test("invalid input and a rejected create keep the entered values", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  await choosePurrfect(page);
+  let posts = 0;
+  await installApi(page);
+  await page.route("**/api/v1/entities", async route => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    posts += 1;
+    if (posts === 1) {
+      await fulfill(route, { error: "Validation Error", fields: { name: "already used" } }, 422);
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/item/add?rootLocationId=${ROOM}&destinationId=${SHELF}`);
+  await fillBelonging(page, "Washable mat");
+  await page.getByTestId("add-item-price").locator("input").fill("nope");
+  await page.getByTestId("purrfect-add-save").click();
+  await expect(page.getByTestId("add-item-error")).toBeVisible();
+  await expect(page.getByTestId("add-item-name").locator("input")).toHaveValue("Washable mat");
+  await expect(page.getByTestId("add-item-price").locator("input")).toHaveValue("nope");
+  expect(posts).toBe(0);
+
+  await page.getByTestId("add-item-price").locator("input").fill("4");
+  await page.getByTestId("purrfect-add-save").click();
+  await expect(page.getByTestId("add-item-error")).toContainText("already used");
+  await expect(page.getByTestId("add-item-name").locator("input")).toHaveValue("Washable mat");
+  expect(posts).toBe(1);
+  await expect(page).toHaveURL(/\/item\/add/);
+});
+
+test("an uncertain create is not sent again", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  await choosePurrfect(page);
+  let posts = 0;
+  await installApi(page);
+  await page.route("**/api/v1/entities", async route => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    posts += 1;
+    await route.abort("failed");
+  });
+  await page.goto(`/item/add?destinationId=${SHELF}&rootLocationId=${ROOM}`);
+  await fillBelonging(page);
+  await page.getByTestId("purrfect-add-save").click();
+  await expect(page.getByTestId("add-item-uncertain")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("add-item-name").locator("input")).toHaveValue("Washable mat");
+  await expect(page.getByTestId("purrfect-add-save")).toBeDisabled();
+  await page.getByTestId("purrfect-add-save").click({ force: true });
+  await page.evaluate(() => {
+    const form = document.querySelector("[data-testid='create-entity-form']") as HTMLFormElement | null;
+    form?.requestSubmit();
+  });
+  expect(posts).toBe(1);
+  await page.getByTestId("add-item-check").click();
+  await expect(page).toHaveURL(new RegExp(`/location/${ROOM}`), { timeout: 30_000 });
+  expect(posts).toBe(1);
+});
+
+test("global cancel goes home and global save opens the created item", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  await choosePurrfect(page);
+  let posts = 0;
+  await installApi(page);
+  await page.route("**/api/v1/entities", async route => {
+    if (route.request().method() === "POST") {
+      posts += 1;
+    }
+    await route.fallback();
+  });
+  await page.goto("/item/add");
+  const form = page.getByTestId("create-entity-form");
+  await expect(form).toHaveAttribute("data-contextual", "false", { timeout: 30_000 });
+  await page.getByTestId("purrfect-add-cancel").click();
+  await expect(page).toHaveURL(/\/home$/, { timeout: 30_000 });
+  expect(posts).toBe(0);
+
+  await page.goto("/item/add");
+  await fillBelonging(page, "Loose bowl");
+  await form.getByRole("combobox").click();
+  await page.getByText("Top shelf", { exact: true }).click();
+  await page.getByTestId("purrfect-add-save").click();
+  await expect(page).toHaveURL(new RegExp(`/item/${CREATED}`), { timeout: 30_000 });
+  expect(posts).toBe(1);
+});
+
+test("a missing origin is not followed on cancel", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  await choosePurrfect(page);
+  let posts = 0;
+  await installApi(page);
+  await page.route("**/api/v1/entities", async route => {
+    if (route.request().method() === "POST") {
+      posts += 1;
+    }
+    await route.fallback();
+  });
+  await page.goto(
+    `/item/add?rootLocationId=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb99&destinationId=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb99`
+  );
+  await expect(page.getByTestId("add-location-rejected")).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("purrfect-add-cancel").click();
+  await expect(page).toHaveURL(/\/home$/, { timeout: 30_000 });
+  expect(posts).toBe(0);
 });

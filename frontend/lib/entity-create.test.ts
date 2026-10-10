@@ -1,16 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   ARTBOARD_SAMPLE,
+  SAFE_CREATE_EXIT,
   buildCreateRequest,
   chooseFilingLocation,
+  classifyCreateResult,
+  compatibleCreateIds,
+  consumeDraftClear,
   draftUsesArtboardSample,
   emptyCreateDraft,
   locationChain,
   locationRowState,
   parsePurchasePriceInput,
+  resolveCreateExit,
+  serverCreateDetail,
+  settleSave,
   shelfPreviewPhase,
   shelfRows,
   shouldApplyShelfPreview,
+  startSave,
   templateApplyFields,
 } from "./entity-create";
 
@@ -209,5 +217,153 @@ describe("entity create draft", () => {
         entityTypeId: "type-1",
       })
     ).toMatchObject({ ok: false, reason: "invalid-quantity" });
+  });
+});
+
+describe("save and cancel exit", () => {
+  const locations = [
+    { id: ROOM, name: "Utility room", parent: null },
+    { id: SHELF, name: "Top shelf", parent: { id: ROOM } },
+    { id: OTHER, name: "Spare bin", parent: { id: ROOM } },
+  ];
+
+  it("returns cancel to the validated room and save to that room even after the shelf changes", () => {
+    const cancel = resolveCreateExit({
+      intent: "cancel",
+      context: { rootLocationId: ROOM, branchId: SHELF, destinationId: SHELF, collectionId: COLLECTION },
+      knownLocationIds: [ROOM, SHELF, OTHER],
+      currentCollectionId: COLLECTION,
+      locations,
+    });
+    expect(cancel.kind).toBe("location");
+    expect(cancel.href.startsWith(`/location/${ROOM}`)).toBe(true);
+    expect(cancel.href).toContain(`rootLocationId=${ROOM}`);
+    expect(cancel.href).not.toContain("return=");
+    expect(cancel.href).not.toContain("http");
+
+    const saved = resolveCreateExit({
+      intent: "save",
+      createdId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      context: { rootLocationId: ROOM, destinationId: SHELF },
+      knownLocationIds: [ROOM, SHELF, OTHER],
+      currentCollectionId: COLLECTION,
+      reportedDestinationId: OTHER,
+      locations,
+    });
+    expect(saved.href.startsWith(`/location/${ROOM}`)).toBe(true);
+    expect(saved.href).toContain(`destinationId=${OTHER}`);
+    expect(saved.href).not.toContain(`/item/`);
+  });
+
+  it("does not file a changed shelf into a room it is not in", () => {
+    const foreign = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1";
+    const saved = resolveCreateExit({
+      intent: "save",
+      createdId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      context: { rootLocationId: ROOM, destinationId: SHELF },
+      knownLocationIds: [ROOM, SHELF, foreign],
+      reportedDestinationId: foreign,
+      locations: [...locations, { id: foreign, name: "Other room", parent: null }],
+    });
+    expect(saved.href.startsWith(`/location/${ROOM}`)).toBe(true);
+    expect(saved.href).toContain(`destinationId=${SHELF}`);
+    expect(saved.href).not.toContain(foreign);
+  });
+
+  it("uses the branch when the room is gone, and home when neither remains", () => {
+    const branch = resolveCreateExit({
+      intent: "cancel",
+      context: { rootLocationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa99", branchId: SHELF },
+      knownLocationIds: [SHELF],
+    });
+    expect(branch.href.startsWith(`/location/${SHELF}`)).toBe(true);
+
+    const missing = resolveCreateExit({
+      intent: "cancel",
+      context: { rootLocationId: ROOM, destinationId: SHELF },
+      knownLocationIds: [],
+    });
+    expect(missing).toEqual({ kind: "home", href: SAFE_CREATE_EXIT });
+
+    const globalSave = resolveCreateExit({
+      intent: "save",
+      createdId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      context: {},
+      knownLocationIds: [ROOM],
+    });
+    expect(globalSave).toEqual({
+      kind: "item",
+      href: "/item/ffffffff-ffff-4fff-8fff-ffffffffffff",
+    });
+  });
+
+  it("drops another collection's return ids", () => {
+    const exit = resolveCreateExit({
+      intent: "cancel",
+      context: { collectionId: FOREIGN, rootLocationId: ROOM },
+      knownLocationIds: [ROOM],
+      currentCollectionId: COLLECTION,
+    });
+    expect(exit).toEqual({ kind: "home", href: SAFE_CREATE_EXIT });
+  });
+});
+
+describe("one create, then stop", () => {
+  it("classifies a missing response as uncertain and a validation error as retryable", () => {
+    expect(classifyCreateResult({ thrown: true })).toEqual({ kind: "uncertain" });
+    expect(classifyCreateResult({ status: 0 })).toEqual({ kind: "uncertain" });
+    expect(classifyCreateResult({ status: 503 })).toEqual({ kind: "uncertain" });
+    expect(classifyCreateResult({ status: 201 })).toEqual({ kind: "uncertain" });
+    expect(classifyCreateResult({ status: 201, id: "not-an-id" })).toEqual({ kind: "uncertain" });
+    expect(classifyCreateResult({ status: 422 })).toEqual({ kind: "rejected" });
+    expect(classifyCreateResult({ status: 201, id: "ffffffff-ffff-4fff-8fff-ffffffffffff" })).toEqual({
+      kind: "created",
+      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    });
+  });
+
+  it("refuses a second submit while saving, after success, and after an uncertain result", () => {
+    const saving = startSave({ phase: "idle", draftCleared: false });
+    expect(saving).toEqual({ phase: "saving", draftCleared: false });
+    expect(startSave(saving!)).toBeNull();
+
+    const saved = settleSave(saving!, "created");
+    expect(saved).toEqual({ phase: "saved", draftCleared: true });
+    expect(startSave(saved)).toBeNull();
+    expect(consumeDraftClear(saved, false)).toBe(true);
+    expect(consumeDraftClear(saved, true)).toBe(false);
+    expect(settleSave(saved, "created")).toBe(saved);
+
+    const uncertain = settleSave(saving!, "uncertain");
+    expect(uncertain.phase).toBe("uncertain");
+    expect(uncertain.draftCleared).toBe(false);
+    expect(startSave(uncertain)).toBeNull();
+
+    const rejected = settleSave(saving!, "rejected");
+    expect(startSave(rejected)?.phase).toBe("saving");
+  });
+
+  it("reads field errors without inventing a retry", () => {
+    expect(serverCreateDetail({ error: "Validation Error", fields: { name: "taken", quantity: 1 } })).toEqual({
+      message: "Validation Error",
+      fields: { name: "taken" },
+    });
+    expect(
+      compatibleCreateIds({
+        locationId: SHELF,
+        templateId: "dddddddd-dddd-4ddd-8ddd-ddddddddddd1",
+        entityTypeId: "type-1",
+        tagIds: ["keep", "drop"],
+        knownLocationIds: [ROOM],
+        knownTagIds: ["keep"],
+        knownTypeIds: null,
+        knownTemplateIds: [],
+      })
+    ).toEqual({
+      locationId: null,
+      templateId: null,
+      entityTypeId: null,
+      tagIds: ["keep"],
+    });
   });
 });

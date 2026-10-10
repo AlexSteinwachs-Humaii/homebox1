@@ -154,7 +154,14 @@
           :on-entity-type-changed="create.onEntityTypeChanged"
         />
         <TemplateSelector :model-value="create.selectedTemplate.value" @template-selected="create.selectTemplate" />
-        <Button type="button" variant="outline" size="sm" data-testid="add-advanced-scan" @click="create.openScanner()">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-testid="add-advanced-scan"
+          :disabled="create.submitBlocked.value"
+          @click="create.openScanner()"
+        >
           {{ $t("purrfect.add_scan") }}
         </Button>
         <Button
@@ -162,6 +169,7 @@
           variant="outline"
           size="sm"
           data-testid="add-advanced-barcode"
+          :disabled="create.submitBlocked.value"
           @click="create.openBarcode()"
         >
           {{ $t("purrfect.add_barcode") }}
@@ -171,6 +179,7 @@
           variant="outline"
           size="sm"
           data-testid="add-advanced-location"
+          :disabled="create.submitBlocked.value"
           @click="create.openLocationCreate()"
         >
           {{ $t("purrfect.add_create_location") }}
@@ -180,6 +189,7 @@
           variant="outline"
           size="sm"
           data-testid="add-advanced-existing"
+          :disabled="create.submitBlocked.value"
           @click="create.openExistingForm()"
         >
           {{ $t("purrfect.add_existing_form") }}

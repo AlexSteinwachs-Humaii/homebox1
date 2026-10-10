@@ -8,7 +8,13 @@
  */
 
 import type { EntityCreate, EntityTemplateCreateItemRequest } from "~~/lib/api/types/data-contracts";
-import { explicitCreateLocationId } from "~~/lib/inventory-context";
+import {
+  explicitCreateLocationId,
+  inventoryDestinationHref,
+  parseInventoryId,
+  type InventoryContext,
+  type InventoryId,
+} from "~~/lib/inventory-context";
 import { knownAmount } from "~~/lib/inventory-visuals";
 
 export const LAST_TEMPLATE_STORAGE_KEY = "homebox:lastUsedTemplate";
@@ -457,4 +463,234 @@ export function buildCreateRequest(input: CreatePayloadInput): CreatePayload {
     body.insured = input.insured;
   }
   return { ok: true, kind: "item", body };
+}
+
+/** A known in-app page. Never a caller-supplied return URL. */
+export const SAFE_CREATE_EXIT = "/home";
+
+export type CreateExit = {
+  kind: "location" | "item" | "home";
+  href: string;
+};
+
+function asKnownLocation(id: string | null | undefined, known: ReadonlySet<InventoryId>): InventoryId | null {
+  const parsed = parseInventoryId(id);
+  if (!parsed || !known.has(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function knownLocationSet(ids: ReadonlyArray<string> | ReadonlySet<string>): Set<InventoryId> {
+  const known = new Set<InventoryId>();
+  for (const id of ids) {
+    const parsed = parseInventoryId(id);
+    if (parsed) {
+      known.add(parsed);
+    }
+  }
+  return known;
+}
+
+/**
+ * Where Save or Cancel may go. Only validated location ids become a location
+ * page. Cancel without one goes home. Save without one opens the created item.
+ * A filing place outside the originating room is not written into that room's
+ * address — the create request already names the real parent.
+ */
+export function resolveCreateExit(args: {
+  intent: "cancel" | "save";
+  createdId?: string | null;
+  context: {
+    collectionId?: string | null;
+    rootLocationId?: string | null;
+    branchId?: string | null;
+    destinationId?: string | null;
+    sourceItemId?: string | null;
+  };
+  knownLocationIds: ReadonlyArray<string> | ReadonlySet<string>;
+  currentCollectionId?: string | null;
+  /** The shelf actually saved, when it still sits in the originating room. */
+  reportedDestinationId?: string | null;
+  locations?: LocationSummaryLike[];
+}): CreateExit {
+  const known = knownLocationSet(args.knownLocationIds);
+  const currentCollection = parseInventoryId(args.currentCollectionId);
+  const contextCollection = parseInventoryId(args.context.collectionId);
+  const collectionOk = !contextCollection || !currentCollection || contextCollection === currentCollection;
+  const created = parseInventoryId(args.createdId);
+
+  if (!collectionOk) {
+    if (args.intent === "save" && created) {
+      return { kind: "item", href: `/item/${created}` };
+    }
+    return { kind: "home", href: SAFE_CREATE_EXIT };
+  }
+
+  const root = asKnownLocation(args.context.rootLocationId, known);
+  const branch = asKnownLocation(args.context.branchId, known);
+  const hintedDestination = asKnownLocation(args.context.destinationId, known);
+  const pageId = root ?? branch;
+
+  if (pageId) {
+    let destination = hintedDestination;
+    const reported = asKnownLocation(args.reportedDestinationId, known);
+    if (reported && args.locations) {
+      const chain = locationChain(reported, args.locations);
+      const inOrigin = reported === pageId || chain.some(part => part.id === pageId);
+      if (inOrigin) {
+        destination = reported;
+      }
+    }
+
+    const context: InventoryContext = {};
+    const collection = currentCollection ?? contextCollection;
+    if (collection) {
+      context.collectionId = collection;
+    }
+    context.rootLocationId = root ?? pageId;
+    if (branch && branch !== context.rootLocationId) {
+      context.branchId = branch;
+    }
+    if (destination) {
+      context.destinationId = destination;
+    }
+    const source = parseInventoryId(args.context.sourceItemId);
+    if (source) {
+      context.sourceItemId = source;
+    }
+    const href = inventoryDestinationHref({ kind: "location", rootLocationId: pageId }, context);
+    if (href?.startsWith("/location/")) {
+      return { kind: "location", href };
+    }
+  }
+
+  if (args.intent === "save" && created) {
+    return { kind: "item", href: `/item/${created}` };
+  }
+  return { kind: "home", href: SAFE_CREATE_EXIT };
+}
+
+export type CreateResultClass = { kind: "created"; id: string } | { kind: "rejected" } | { kind: "uncertain" };
+
+/**
+ * A missing response, a gateway error, or a success without an id is not a
+ * safe retry. A 4xx is a definite rejection and may be corrected and sent again.
+ */
+export function classifyCreateResult(input: {
+  thrown?: boolean;
+  status?: number | null;
+  id?: unknown;
+}): CreateResultClass {
+  if (input.thrown || input.status == null || !Number.isFinite(input.status) || input.status <= 0) {
+    return { kind: "uncertain" };
+  }
+  if (input.status >= 200 && input.status < 300) {
+    const id = typeof input.id === "string" ? parseInventoryId(input.id) : null;
+    return id ? { kind: "created", id } : { kind: "uncertain" };
+  }
+  if (input.status === 408 || input.status >= 500) {
+    return { kind: "uncertain" };
+  }
+  return { kind: "rejected" };
+}
+
+export type SavePhase = "idle" | "saving" | "rejected" | "uncertain" | "saved" | "stale";
+
+export type SaveSession = {
+  phase: SavePhase;
+  draftCleared: boolean;
+};
+
+/** One in-flight create. Uncertain and completed sessions cannot start another. */
+export function startSave(session: SaveSession): SaveSession | null {
+  if (session.phase === "saving" || session.phase === "uncertain" || session.phase === "saved") {
+    return null;
+  }
+  return { phase: "saving", draftCleared: session.draftCleared };
+}
+
+export function settleSave(session: SaveSession, result: "created" | "rejected" | "uncertain" | "stale"): SaveSession {
+  if (session.phase !== "saving") {
+    return session;
+  }
+  if (result === "created") {
+    return { phase: "saved", draftCleared: true };
+  }
+  if (result === "uncertain") {
+    return { phase: "uncertain", draftCleared: false };
+  }
+  if (result === "stale") {
+    return { phase: "stale", draftCleared: session.draftCleared };
+  }
+  return { phase: "rejected", draftCleared: false };
+}
+
+/** True only the first time a successful session asks to clear the draft. */
+export function consumeDraftClear(session: SaveSession, alreadyConsumed: boolean): boolean {
+  return session.phase === "saved" && session.draftCleared && !alreadyConsumed;
+}
+
+export function serverCreateDetail(data: unknown): { message: string; fields: Record<string, string> } {
+  if (!data || typeof data !== "object") {
+    return { message: "", fields: {} };
+  }
+  const record = data as Record<string, unknown>;
+  const message = typeof record.error === "string" ? record.error.trim() : "";
+  const fields: Record<string, string> = {};
+  const raw = record.fields;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === "string" && value.trim()) {
+        fields[key] = value.trim();
+      }
+    }
+  }
+  return { message, fields };
+}
+
+/**
+ * Drop ids that cannot be written in the collection now on screen.
+ * Tags are dropped entirely until that collection's tag list is ready.
+ */
+export function compatibleCreateIds(args: {
+  locationId?: string | null;
+  templateId?: string | null;
+  entityTypeId?: string | null;
+  tagIds: string[];
+  knownLocationIds: ReadonlyArray<string> | ReadonlySet<string>;
+  knownTagIds?: ReadonlyArray<string> | ReadonlySet<string> | null;
+  knownTypeIds?: ReadonlyArray<string> | ReadonlySet<string> | null;
+  knownTemplateIds?: ReadonlyArray<string> | ReadonlySet<string> | null;
+}): {
+  locationId: string | null;
+  templateId: string | null;
+  entityTypeId: string | null;
+  tagIds: string[];
+} {
+  const locations = knownLocationSet(args.knownLocationIds);
+  const allow = (
+    id: string | null | undefined,
+    known: ReadonlyArray<string> | ReadonlySet<string> | null | undefined
+  ) => {
+    const parsed = parseInventoryId(id);
+    if (!parsed || !known) {
+      return null;
+    }
+    const set = known instanceof Set ? known : new Set(known);
+    return set.has(parsed) || set.has(id ?? "") ? parsed : null;
+  };
+  return {
+    locationId: asKnownLocation(args.locationId, locations),
+    templateId: allow(args.templateId, args.knownTemplateIds),
+    entityTypeId: allow(args.entityTypeId, args.knownTypeIds),
+    tagIds:
+      args.knownTagIds == null
+        ? []
+        : args.tagIds.filter(id => {
+            const parsed = parseInventoryId(id) ?? id;
+            const set = args.knownTagIds instanceof Set ? args.knownTagIds : new Set(args.knownTagIds);
+            return set.has(parsed) || set.has(id);
+          }),
+  };
 }

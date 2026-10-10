@@ -11,20 +11,29 @@ import type {
 } from "~~/lib/api/types/data-contracts";
 import {
   LAST_TEMPLATE_STORAGE_KEY,
+  SAFE_CREATE_EXIT,
   SHELF_PREVIEW_PAGE_SIZE,
   buildCreateRequest,
   chooseFilingLocation,
+  classifyCreateResult,
+  compatibleCreateIds,
+  consumeDraftClear,
   emptyCreateDraft,
   locationChain,
   locationRowState,
+  resolveCreateExit,
+  serverCreateDetail,
+  settleSave,
   shelfPreviewPhase,
   shelfRows,
   shouldApplyShelfPreview,
+  startSave,
   templateApplyFields,
   type CreateDraft,
+  type SaveSession,
   type ShelfRow,
 } from "~~/lib/entity-create";
-import { acceptInventoryNavigation, inventoryDestinationHref, type InventoryContext } from "~~/lib/inventory-context";
+import { acceptInventoryNavigation, type InventoryContext } from "~~/lib/inventory-context";
 import { notifyContextualItemCreated } from "~~/lib/contextual-create";
 import { useEntityTypeStore } from "~~/stores/entityTypes";
 import { useLocationStore } from "~~/stores/locations";
@@ -58,8 +67,6 @@ export function useProvidedEntityCreate() {
 export function useEntityCreate() {
   const { t } = useI18n();
   const route = useRoute();
-  const router = useRouter();
-  const api = useUserApi();
   const { openDialog } = useDialog();
   const { selectedId, selectedCollection } = useCollections();
   const locationsStore = useLocationStore();
@@ -94,9 +101,13 @@ export function useEntityCreate() {
   const previewPartial = ref(false);
   const saving = ref(false);
   const fieldError = ref("");
+  const session = ref<SaveSession>({ phase: "idle", draftCleared: false });
+  let draftClearConsumed = false;
   let locationToken = 0;
   let previewToken = 0;
-  let submitLock = false;
+  let writeGeneration = 0;
+  /** Collection whose location list was confirmed. A save before this is refused. */
+  const locationsCollectionId = ref<string | null>(null);
 
   const entityTypes = computed(() => entityTypeStore.itemTypes);
   const tags = computed(() => tagStore.tags);
@@ -191,7 +202,7 @@ export function useEntityCreate() {
   }
 
   async function loadTemplate(id: string, userSelected: boolean) {
-    const { data, error } = await api.templates.get(id);
+    const { data, error } = await useUserApi().templates.get(id);
     if (error || !data) {
       if (userSelected) {
         toast.error(t("components.template.toast.load_failed"));
@@ -241,15 +252,18 @@ export function useEntityCreate() {
 
   async function refreshLocations() {
     const token = ++locationToken;
+    const generationAtStart = writeGeneration;
     const collectionAtStart = selectedId.value;
     locationStatus.value = "loading";
-    const [list] = await Promise.all([
+    locationsCollectionId.value = null;
+    const client = useUserApi();
+    const [list, typesResult] = await Promise.all([
       locationsStore.refreshChildren(),
+      client.entityTypes.getAll().catch(() => null),
       locationsStore.refreshTree(),
-      entityTypeStore.ensureFetched().catch(() => undefined),
-      tagStore.ensureAllTagsFetched().catch(() => undefined),
+      tagStore.refresh().catch(() => undefined),
     ]);
-    if (token !== locationToken || selectedId.value !== collectionAtStart) {
+    if (token !== locationToken || generationAtStart !== writeGeneration || selectedId.value !== collectionAtStart) {
       return;
     }
     if (list.error) {
@@ -261,9 +275,30 @@ export function useEntityCreate() {
       return;
     }
     locations.value = locationsStore.allLocations;
+    if (typesResult && !typesResult.error && Array.isArray(typesResult.data)) {
+      entityTypeStore.types = typesResult.data;
+    }
     locationStatus.value = "ready";
-    if (!selectedEntityType.value) {
-      const first = entityTypes.value[0] ?? null;
+    locationsCollectionId.value = collectionAtStart;
+    const compatible = compatibleCreateIds({
+      locationId: confirmedLocationId.value,
+      templateId: templateData.value?.id,
+      entityTypeId: draft.entityTypeId,
+      tagIds: draft.tagIds,
+      knownLocationIds: locations.value.map(location => location.id),
+      knownTagIds: tagStore.tagsStatus === "ready" ? tagStore.tags.map(tag => tag.id) : null,
+      knownTypeIds: entityTypes.value.map(type => type.id),
+      knownTemplateIds: templateData.value ? [templateData.value.id] : [],
+    });
+    if (!compatible.templateId) {
+      templateData.value = null;
+      selectedTemplate.value = null;
+      templateUserSelected.value = false;
+    }
+    draft.tagIds = compatible.tagIds;
+    const typeStillKnown = entityTypes.value.find(type => type.id === compatible.entityTypeId) ?? null;
+    if (!selectedEntityType.value || !typeStillKnown) {
+      const first = typeStillKnown ?? entityTypes.value[0] ?? null;
       selectedEntityType.value = first;
       draft.entityTypeId = first?.id ?? "";
     }
@@ -289,7 +324,7 @@ export function useEntityCreate() {
     previewStatus.value = "loading";
     previewRows.value = [];
     previewPartial.value = false;
-    const resp = await api.items.getAll({
+    const resp = await useUserApi().items.getAll({
       parentIds: [locationId],
       page: 1,
       pageSize: SHELF_PREVIEW_PAGE_SIZE,
@@ -354,6 +389,8 @@ export function useEntityCreate() {
         return t("purrfect.add_price_invalid");
       case "invalid-quantity":
         return t("purrfect.add_quantity_invalid");
+      case "description-too-long":
+        return t("purrfect.add_description_too_long");
       case "purchase-from-too-long":
         return t("purrfect.add_vendor_too_long");
       default:
@@ -361,12 +398,133 @@ export function useEntityCreate() {
     }
   }
 
-  async function save() {
-    if (submitLock || saving.value) {
+  function fieldLabel(key: string): string {
+    switch (key) {
+      case "name":
+        return t("global.name");
+      case "description":
+        return t("global.details");
+      case "quantity":
+        return t("global.quantity");
+      case "purchasePrice":
+        return t("items.purchase_price");
+      case "purchaseFrom":
+        return t("items.purchased_from");
+      case "parentId":
+        return t("items.location");
+      case "tagIds":
+        return t("purrfect.add_tags_optional");
+      case "insured":
+        return t("global.insured");
+      default:
+        return key;
+    }
+  }
+
+  function formatServerError(data: unknown): string {
+    const detail = serverCreateDetail(data);
+    const parts = Object.entries(detail.fields).map(([key, value]) => `${fieldLabel(key)}: ${value}`);
+    if (parts.length > 0) {
+      return parts.join(" ");
+    }
+    if (detail.message) {
+      return detail.message;
+    }
+    return t("components.entity.create_modal.toast.create_failed", { type: t("global.item") });
+  }
+
+  function exitHref(intent: "cancel" | "save", createdId?: string | null) {
+    return resolveCreateExit({
+      intent,
+      createdId,
+      context: context.value,
+      knownLocationIds: locations.value.map(location => location.id),
+      currentCollectionId: selectedId.value,
+      reportedDestinationId: confirmedLocationId.value,
+      locations: locations.value,
+    }).href;
+  }
+
+  function releaseRejected() {
+    session.value = settleSave(session.value, "rejected");
+    saving.value = false;
+  }
+
+  function clearDraftOnce() {
+    if (!consumeDraftClear(session.value, draftClearConsumed)) {
       return;
     }
-    submitLock = true;
+    draftClearConsumed = true;
+    const typeId = draft.entityTypeId;
+    Object.assign(draft, emptyCreateDraft());
+    draft.entityTypeId = typeId;
+    draft.locationId = "";
+    confirmedLocationId.value = null;
+    templateData.value = null;
+    selectedTemplate.value = null;
+    templateUserSelected.value = false;
+  }
+
+  async function refreshAfterCreate() {
+    try {
+      await locationsStore.refreshChildren();
+      await locationsStore.refreshTree();
+    } catch {
+      // A failed refresh is not another create.
+    }
+    try {
+      clearNuxtData(
+        (key: string) => key.startsWith("location:") || key.includes("statistics") || key.endsWith("_item_list")
+      );
+    } catch {
+      // Cache clearing is best-effort. The location page still loads on arrival.
+    }
+    notifyContextualItemCreated();
+  }
+
+  async function save() {
+    const next = startSave(session.value);
+    if (!next) {
+      return;
+    }
+    session.value = next;
+    saving.value = true;
     fieldError.value = "";
+    const generation = writeGeneration;
+    const collectionAtSubmit = selectedId.value;
+
+    const stale = () => generation !== writeGeneration || selectedId.value !== collectionAtSubmit;
+
+    if (locationsCollectionId.value !== collectionAtSubmit || locationStatus.value !== "ready") {
+      fieldError.value = t("purrfect.add_not_ready");
+      releaseRejected();
+      return;
+    }
+
+    const compatible = compatibleCreateIds({
+      locationId: confirmedLocationId.value,
+      templateId: templateData.value?.id,
+      entityTypeId: draft.entityTypeId,
+      tagIds: [...draft.tagIds],
+      knownLocationIds: locations.value.map(location => location.id),
+      knownTagIds: tagsStatus.value === "ready" ? tags.value.map(tag => tag.id) : null,
+      knownTypeIds: entityTypes.value.map(type => type.id),
+      knownTemplateIds: templateData.value ? [templateData.value.id] : [],
+    });
+    if (confirmedLocationId.value && !compatible.locationId) {
+      confirmedLocationId.value = null;
+      draft.locationId = "";
+      fieldError.value = t("purrfect.add_location_rejected");
+      releaseRejected();
+      return;
+    }
+    if (draft.tagIds.some(id => !compatible.tagIds.includes(id))) {
+      draft.tagIds = compatible.tagIds;
+      fieldError.value = t("purrfect.add_tags_rejected");
+      releaseRejected();
+      return;
+    }
+
     const request = buildCreateRequest({
       name: draft.name,
       description: draft.description,
@@ -374,62 +532,90 @@ export function useEntityCreate() {
       purchasePrice: draft.purchasePrice,
       purchaseFrom: draft.purchaseFrom,
       insured: draft.insured,
-      tagIds: [...draft.tagIds],
+      tagIds: compatible.tagIds,
       knownTagIds: tagsStatus.value === "ready" ? tags.value.map(tag => tag.id) : undefined,
-      locationId: confirmedLocationId.value ?? "",
-      entityTypeId: draft.entityTypeId,
+      locationId: compatible.locationId ?? "",
+      entityTypeId: compatible.entityTypeId ?? "",
       manufacturer: draft.manufacturer,
       modelNumber: draft.modelNumber,
-      templateId: templateData.value?.id,
+      templateId: compatible.templateId,
     });
     if (!request.ok) {
       fieldError.value = errorText(request.reason);
-      submitLock = false;
+      releaseRejected();
       return;
     }
-
-    saving.value = true;
-    const result =
-      request.kind === "template"
-        ? await api.templates.createItem(request.templateId, request.body)
-        : await api.items.create(request.body);
-    if (result.error || !result.data) {
+    if (stale()) {
+      session.value = settleSave(session.value, "stale");
       saving.value = false;
-      submitLock = false;
-      fieldError.value = t("components.entity.create_modal.toast.create_failed", { type: t("global.item") });
+      fieldError.value = t("purrfect.add_stale_write");
       return;
     }
 
-    const createdId = result.data.id;
-    const origin = context.value.rootLocationId;
-    Object.assign(draft, emptyCreateDraft());
-    templateData.value = null;
-    if (origin && contextual.value) {
-      notifyContextualItemCreated();
-      const href = inventoryDestinationHref({ kind: "location", rootLocationId: origin }, context.value);
-      await navigateTo(href ?? `/location/${origin}`);
+    const client = useUserApi();
+    let thrown = false;
+    let status: number | null = null;
+    let data: { id?: string } | null = null;
+    let failed = false;
+    try {
+      const result =
+        request.kind === "template"
+          ? await client.templates.createItem(request.templateId, request.body)
+          : await client.items.create(request.body);
+      status = result.status;
+      failed = Boolean(result.error);
+      data = result.data;
+    } catch {
+      thrown = true;
+    }
+
+    if (stale()) {
+      session.value = settleSave(session.value, "stale");
+      saving.value = false;
+      fieldError.value = t("purrfect.add_stale_write");
       return;
     }
-    await navigateTo(`/item/${createdId}`);
+
+    const classified = classifyCreateResult({
+      thrown,
+      status,
+      id: !thrown && !failed ? data?.id : undefined,
+    });
+    if (classified.kind === "uncertain") {
+      session.value = settleSave(session.value, "uncertain");
+      saving.value = false;
+      fieldError.value = t("purrfect.add_uncertain");
+      return;
+    }
+    if (classified.kind === "rejected") {
+      fieldError.value = formatServerError(data);
+      releaseRejected();
+      return;
+    }
+
+    const href = exitHref("save", classified.id);
+    session.value = settleSave(session.value, "created");
+    clearDraftOnce();
+    await refreshAfterCreate();
+    if (stale()) {
+      fieldError.value = t("purrfect.add_stale_write");
+      return;
+    }
+    await navigateTo(href);
   }
 
   function cancel() {
     if (saving.value) {
       return;
     }
-    if (import.meta.client && window.history.length > 1) {
-      router.back();
-      return;
-    }
-    const origin = context.value.rootLocationId;
-    if (origin) {
-      void navigateTo(`/location/${origin}`);
-      return;
-    }
-    void navigateTo("/home");
+    const href = exitHref("cancel");
+    void navigateTo(href || SAFE_CREATE_EXIT);
   }
 
   function openExistingForm() {
+    if (saving.value || session.value.phase === "uncertain" || session.value.phase === "saved") {
+      return;
+    }
     openDialog(DialogID.CreateEntity, {
       params: contextual.value
         ? {
@@ -445,15 +631,28 @@ export function useEntityCreate() {
     });
   }
 
+  function writesBlocked() {
+    return saving.value || session.value.phase === "uncertain" || session.value.phase === "saved";
+  }
+
   function openScanner() {
+    if (writesBlocked()) {
+      return;
+    }
     openDialog(DialogID.Scanner);
   }
 
   function openBarcode() {
+    if (writesBlocked()) {
+      return;
+    }
     openDialog(DialogID.ProductImport);
   }
 
   function openLocationCreate() {
+    if (writesBlocked()) {
+      return;
+    }
     openDialog(DialogID.CreateEntity, { params: { baseType: "location" } });
   }
 
@@ -468,12 +667,39 @@ export function useEntityCreate() {
     await refreshLocations();
   });
 
-  watch(selectedId, () => {
+  watch(selectedId, (next, previous) => {
+    if (next === previous) {
+      return;
+    }
+    writeGeneration += 1;
+    locationsCollectionId.value = null;
+    const hadBindings = Boolean(
+      confirmedLocationId.value || templateData.value || draft.tagIds.length || context.value.rootLocationId
+    );
+    const wasSaving = saving.value;
     readContext();
     touched.location = false;
     confirmedLocationId.value = null;
     draft.locationId = "";
+    draft.tagIds = [];
+    templateData.value = null;
+    selectedTemplate.value = null;
+    templateUserSelected.value = false;
+    selectedEntityType.value = null;
+    draft.entityTypeId = "";
     clearPreview();
+    locationsStore.prepareForCollection(next);
+    tagStore.prepareForCollection(next);
+    entityTypeStore.types = null;
+    if (session.value.phase !== "uncertain" && session.value.phase !== "saved") {
+      session.value = { phase: wasSaving ? "stale" : "idle", draftCleared: session.value.draftCleared };
+      saving.value = false;
+    }
+    if (wasSaving) {
+      fieldError.value = t("purrfect.add_stale_write");
+    } else if (hadBindings && session.value.phase !== "uncertain") {
+      fieldError.value = t("purrfect.add_collection_changed");
+    }
     void refreshLocations();
   });
 
@@ -481,6 +707,10 @@ export function useEntityCreate() {
     draft,
     saving,
     fieldError,
+    outcome: computed(() => session.value.phase),
+    submitBlocked: computed(
+      () => saving.value || session.value.phase === "uncertain" || session.value.phase === "saved"
+    ),
     contextual,
     context,
     collectionName,
