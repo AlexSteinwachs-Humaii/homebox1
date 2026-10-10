@@ -78,6 +78,7 @@
     saveTemplate: [];
     createSubitem: [];
     refreshChildren: [];
+    openLocation: [];
     "update:showEmpty": [value: boolean];
   }>();
 
@@ -93,6 +94,14 @@
 
   function onShowEmpty(value: boolean | undefined) {
     emit("update:showEmpty", Boolean(value));
+  }
+
+  function onOpenLocation(event: MouseEvent) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    event.preventDefault();
+    emit("openLocation");
   }
 </script>
 
@@ -265,6 +274,7 @@
               :to="openLocationHref"
               data-testid="open-location"
               class="mt-3 inline-flex rounded-sm text-sm font-semibold text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              @click="onOpenLocation"
             >
               {{ $t("purrfect.item_open_location") }}
               <span aria-hidden="true"> →</span>

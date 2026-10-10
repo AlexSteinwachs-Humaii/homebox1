@@ -101,7 +101,10 @@ describe("presentItemLocation", () => {
       "Pet supplies",
       "Top shelf",
     ]);
-    expect(presented.openLocationHref).toBe(`/location/${SHELF}`);
+    expect(presented.openLocationHref).toBe(
+      `/location/${ROOM}?collectionId=${COLLECTION}&rootLocationId=${ROOM}&branchId=${SUPPLIES}&destinationId=${SHELF}&sourceItemId=${ITEM}`
+    );
+    expect(presented.locationContext.sourceItemId).toBe(ITEM);
     expect(presented.crumbs.some(crumb => crumb.name === "Cat carrier")).toBe(false);
   });
 
@@ -116,6 +119,7 @@ describe("presentItemLocation", () => {
     expect(presented.crumbs).toEqual([]);
     expect(presented.locationSegments).toEqual([]);
     expect(presented.openLocationHref).toBeNull();
+    expect(presented.locationContext).toEqual({});
   });
 
   it("uses the nearest location when the path mislabels every ancestor and the list has not loaded", () => {
@@ -133,7 +137,9 @@ describe("presentItemLocation", () => {
 
     expect(presented.crumbs.find(crumb => crumb.id === ROOM)?.href).toBeNull();
     expect(presented.crumbs.find(crumb => crumb.id === BOX)?.href).toBeNull();
-    expect(presented.openLocationHref).toBe(`/location/${SHELF}`);
+    expect(presented.openLocationHref).toBe(
+      `/location/${SHELF}?rootLocationId=${SHELF}&destinationId=${SHELF}&sourceItemId=${ITEM}`
+    );
     expect(presented.locationSegments).toEqual([{ id: SHELF, name: "Top shelf" }]);
   });
 
@@ -145,7 +151,9 @@ describe("presentItemLocation", () => {
       parent: { id: BOX, name: "Travel box", parent: { id: ROOM, name: "Utility room" } },
     });
 
-    expect(presented.openLocationHref).toBe(`/location/${ROOM}`);
+    expect(presented.openLocationHref).toBe(
+      `/location/${ROOM}?rootLocationId=${ROOM}&destinationId=${ROOM}&sourceItemId=${ITEM}`
+    );
     expect(presented.crumbs.find(crumb => crumb.id === BOX)?.href).toBe(`/item/${BOX}`);
     expect(presented.locationSegments.map(segment => segment.id)).toEqual([ROOM]);
   });

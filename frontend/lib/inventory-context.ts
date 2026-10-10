@@ -486,6 +486,265 @@ export function acceptInventoryNavigation(
   return { ok: true, navigation: { destination: parsed.navigation.destination, context } };
 }
 
+const MAX_LOCATION_ANCESTORS = 64;
+
+export type ItemAncestorInput = {
+  id?: string | null;
+  name?: string | null;
+  /** Ignored. The path API labels every ancestor, including items, as a location. */
+  type?: string | null;
+  parent?: ItemAncestorInput | null;
+};
+
+export type ClassifiedAncestor = {
+  id: InventoryId;
+  name: string;
+  kind: "location" | "item" | "pending";
+};
+
+export type ItemLocationHandoff = {
+  /** Empty when the item has no valid location, or the collection hint was discarded. */
+  context: InventoryContext;
+  /**
+   * `/location/:rootId` plus the foundation id query.
+   * Null when there is no containing location or the hint belongs to another collection.
+   */
+  href: string | null;
+  ancestors: ClassifiedAncestor[];
+  locationSegments: Array<{ id: InventoryId; name: string }>;
+};
+
+function sameInventoryId(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function ancestorName(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeKnownLocationIds(ids: ReadonlySet<string> | null): Set<string> | null {
+  if (ids === null) {
+    return null;
+  }
+  const normalized = new Set<string>();
+  for (const id of ids) {
+    const parsed = parseInventoryId(id);
+    if (parsed) {
+      normalized.add(parsed);
+    }
+  }
+  return normalized;
+}
+
+function parentChain(parent: ItemAncestorInput | null | undefined): ItemAncestorInput[] {
+  const chain: ItemAncestorInput[] = [];
+  const seen = new Set<string>();
+  let current = parent ?? null;
+  while (current && chain.length < MAX_LOCATION_ANCESTORS) {
+    const marker = current.id?.trim() || ancestorName(current.name);
+    if (marker && seen.has(marker.toLowerCase())) {
+      break;
+    }
+    if (marker) {
+      seen.add(marker.toLowerCase());
+    }
+    chain.push({ id: current.id, name: current.name });
+    current = current.parent ?? null;
+  }
+  return chain.reverse();
+}
+
+function ancestorsWithoutSelf(
+  itemId: string,
+  path: readonly ItemAncestorInput[] | null | undefined
+): ItemAncestorInput[] {
+  if (!path || path.length === 0) {
+    return [];
+  }
+  const trimmed = path.slice(0, MAX_LOCATION_ANCESTORS).filter(entry => {
+    return !entry.id || !sameInventoryId(entry.id, itemId);
+  });
+  return trimmed;
+}
+
+function collectionsDisagree(
+  requested: InventoryId | null,
+  currentCollectionId: string | null | undefined,
+  currentProvided: boolean
+): boolean {
+  if (!currentProvided) {
+    return false;
+  }
+  if (currentCollectionId == null || currentCollectionId === "") {
+    return false;
+  }
+  const current = parseInventoryId(currentCollectionId);
+  if (!current) {
+    return true;
+  }
+  return requested !== null && requested !== current;
+}
+
+/**
+ * Item → location handoff.
+ *
+ * Root is the topmost actual location ancestor. Branch is the next location
+ * below that root, when one exists. Destination is the nearest containing
+ * location. Source is the item being viewed. Path `type` is never consulted.
+ * The result is a hint for the location screen: it does not change inventory
+ * and it does not switch the signed-in collection.
+ */
+export function deriveItemLocationHandoff(input: {
+  itemId: string;
+  collectionId?: string | null;
+  currentCollectionId?: string | null;
+  path?: readonly ItemAncestorInput[] | null;
+  parent?: ItemAncestorInput | null;
+  location?: ItemAncestorInput | null;
+  /** null while this collection's locations have not loaded. An empty set is a loaded collection with none. */
+  locationIds: ReadonlySet<string> | null;
+}): ItemLocationHandoff {
+  const requestedCollection = parseInventoryId(input.collectionId);
+  const currentProvided = input.currentCollectionId !== undefined;
+  const discardCollection = collectionsDisagree(requestedCollection, input.currentCollectionId, currentProvided);
+  const sourceId = parseInventoryId(input.itemId);
+  const knownIds = normalizeKnownLocationIds(input.locationIds);
+  const statedLocationId = parseInventoryId(input.location?.id);
+  const statedIsSelf = statedLocationId !== null && sourceId !== null && statedLocationId === sourceId;
+  const statedIsListed = statedLocationId !== null && (knownIds === null || knownIds.has(statedLocationId));
+  const trustedLocationId = statedIsSelf || !statedIsListed ? null : statedLocationId;
+
+  const fromPath = ancestorsWithoutSelf(input.itemId, input.path);
+  const rawAncestors = fromPath.length > 0 ? fromPath : parentChain(input.parent);
+  const ancestors: ClassifiedAncestor[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of rawAncestors) {
+    const name = ancestorName(entry.name);
+    const id = parseInventoryId(entry.id);
+    if (!name || !id || seen.has(id) || sameInventoryId(id, input.itemId)) {
+      continue;
+    }
+    seen.add(id);
+
+    let kind: ClassifiedAncestor["kind"];
+    if ((trustedLocationId !== null && id === trustedLocationId) || knownIds?.has(id)) {
+      kind = "location";
+    } else if (knownIds === null) {
+      kind = "pending";
+    } else {
+      kind = "item";
+    }
+    ancestors.push({ id, name, kind });
+  }
+
+  const pathLocations = ancestors.filter(ancestor => ancestor.kind === "location");
+  let locationSegments = pathLocations.map(ancestor => ({ id: ancestor.id, name: ancestor.name }));
+  if (trustedLocationId && !seen.has(trustedLocationId)) {
+    const name = ancestorName(input.location?.name);
+    if (name) {
+      locationSegments = [...locationSegments, { id: trustedLocationId, name }];
+      ancestors.push({ id: trustedLocationId, name, kind: "location" });
+      seen.add(trustedLocationId);
+    }
+  }
+
+  const nearestPathLocation = pathLocations.at(-1)?.id ?? null;
+  let navigationChain = locationSegments;
+  if (trustedLocationId && nearestPathLocation && trustedLocationId !== nearestPathLocation) {
+    const statedIndex = pathLocations.findIndex(ancestor => ancestor.id === trustedLocationId);
+    if (statedIndex >= 0) {
+      navigationChain = pathLocations.slice(0, statedIndex + 1).map(ancestor => ({
+        id: ancestor.id,
+        name: ancestor.name,
+      }));
+    } else {
+      const stated = locationSegments.find(segment => segment.id === trustedLocationId);
+      navigationChain = stated ? [stated] : [];
+    }
+  } else if (trustedLocationId && !nearestPathLocation) {
+    const stated = locationSegments.find(segment => segment.id === trustedLocationId);
+    navigationChain = stated ? [stated] : [];
+  }
+
+  const root = navigationChain[0]?.id ?? null;
+  const destination = navigationChain.at(-1)?.id ?? null;
+  const branch = navigationChain.length >= 2 ? (navigationChain[1]?.id ?? null) : null;
+  const empty = emptyInventoryContext();
+
+  if (discardCollection || !sourceId || !root || !destination) {
+    return { context: empty, href: null, ancestors, locationSegments };
+  }
+
+  const context: InventoryContext = {
+    rootLocationId: root,
+    destinationId: destination,
+    sourceItemId: sourceId,
+  };
+  if (branch && branch !== root) {
+    context.branchId = branch;
+  }
+  const collectionForHref =
+    requestedCollection ?? (currentProvided ? parseInventoryId(input.currentCollectionId) : null);
+  if (collectionForHref && !discardCollection) {
+    context.collectionId = collectionForHref;
+  }
+
+  return {
+    context,
+    href: inventoryDestinationHref({ kind: "location", rootLocationId: root }, context),
+    ancestors,
+    locationSegments,
+  };
+}
+
+/**
+ * Keep a location hint only when it belongs to the signed-in collection.
+ * A rejected hint is not a destination to follow. `replacementHref` is the
+ * same path with the hint removed, so the caller can drop it without writing
+ * inventory.
+ */
+export function discardIncompatibleInventoryContext(
+  href: string,
+  currentCollectionId?: string | null
+): { context: InventoryContext; replacementHref: string | null } {
+  const accepted = acceptInventoryNavigation(href, { currentCollectionId });
+  if (accepted.ok) {
+    return { context: accepted.navigation.context, replacementHref: null };
+  }
+
+  const hashIndex = href.indexOf("#");
+  const withoutHash = hashIndex >= 0 ? href.slice(0, hashIndex) : href;
+  const queryIndex = withoutHash.indexOf("?");
+  if (queryIndex < 0) {
+    return { context: emptyInventoryContext(), replacementHref: null };
+  }
+
+  const path = withoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(withoutHash.slice(queryIndex + 1));
+  let removed = false;
+  for (const key of [...params.keys()]) {
+    const lower = key.toLowerCase();
+    const isContext = (Object.values(INVENTORY_CONTEXT_QUERY_KEYS) as string[]).some(
+      queryKey => queryKey.toLowerCase() === lower
+    );
+    if (isContext || REJECTED_RETURN_URL_KEYS.has(lower)) {
+      params.delete(key);
+      removed = true;
+    }
+  }
+
+  if (!removed || !path.startsWith("/")) {
+    return { context: emptyInventoryContext(), replacementHref: null };
+  }
+
+  const rest = params.toString();
+  return {
+    context: emptyInventoryContext(),
+    replacementHref: rest ? `${path}?${rest}` : path,
+  };
+}
+
 export function encodeInventoryContext(context: InventoryContext): string {
   const params = new URLSearchParams();
   for (const key of CONTEXT_KEYS) {

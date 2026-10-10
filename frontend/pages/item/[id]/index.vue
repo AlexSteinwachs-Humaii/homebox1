@@ -46,6 +46,7 @@
   import ItemAttachmentsList from "~/components/Item/AttachmentsList.vue";
   import ItemViewSelectable from "~/components/Item/View/Selectable.vue";
   import ItemPurrfectDetail from "~/components/Item/PurrfectDetail.vue";
+  import { useInventoryNavigation } from "~~/composables/use-inventory-navigation";
   import { PURRFECT_DESKTOP_MEDIA_QUERY, parseInventoryId } from "~~/lib/inventory-context";
   import {
     createItemLoadGate,
@@ -78,6 +79,7 @@
   const collectionId = computed(() => selectedId.value ?? preferences.value.collectionId ?? null);
   const purrfectDesktop = computed(() => theme.value === "purrfect-home" && isDesktop.value);
   const locationStore = useLocationStore();
+  const { openLocation } = useInventoryNavigation();
 
   const temporaryDuplicateSettings = ref<DuplicateSettings>({
     copyMaintenance: preferences.value.duplicateSettings.copyMaintenance,
@@ -221,6 +223,10 @@
       locationIds: locationIds.value,
     });
   });
+
+  function followOpenLocation() {
+    return openLocation(locationPresentation.value.openLocationHref);
+  }
 
   const assetLabel = computed(() => {
     const id = recordedAssetId(shownItem.value?.assetId);
@@ -917,6 +923,7 @@
       @create-subitem="createSubitem"
       @refresh-children="refreshItemList"
       @update:show-empty="preferences.showEmpty = $event"
+      @open-location="followOpenLocation"
     >
       <template #nested>
         <NuxtPage :item="shownItem" :page-key="itemId" />

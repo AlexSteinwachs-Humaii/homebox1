@@ -3,6 +3,8 @@ import {
   PURRFECT_CONTEXTUAL_ADD_PATH,
   acceptInventoryNavigation,
   collectionIdToActivate,
+  deriveItemLocationHandoff,
+  discardIncompatibleInventoryContext,
   encodeInventoryContext,
   inventoryDestinationHref,
   itemsSearchHref,
@@ -18,6 +20,7 @@ const ROOT = "33333333-3333-4333-8333-333333333333";
 const BRANCH = "44444444-4444-4444-8444-444444444444";
 const DESTINATION = "55555555-5555-4555-8555-555555555555";
 const SOURCE = "66666666-6666-4666-8666-666666666666";
+const NESTED = "77777777-7777-4777-8777-777777777777";
 
 describe("inventory ids", () => {
   it("accepts uuid record ids and rejects everything else", () => {
@@ -219,5 +222,168 @@ describe("search and add item launch", () => {
         contextualAddPath: "https://evil.test/item/add",
       })
     ).toEqual({ mode: "dialog" });
+  });
+});
+
+describe("item location handoff", () => {
+  const locations = new Set([ROOT, BRANCH, DESTINATION]);
+
+  it("hands a deep path to the root with branch, destination and source", () => {
+    const handoff = deriveItemLocationHandoff({
+      itemId: SOURCE,
+      collectionId: COLLECTION,
+      currentCollectionId: COLLECTION,
+      locationIds: locations,
+      location: { id: DESTINATION, name: "Top shelf" },
+      path: [
+        { id: ROOT, name: "Utility room", type: "item" },
+        { id: BRANCH, name: "Pet supplies", type: "location" },
+        { id: NESTED, name: "Travel box", type: "location" },
+        { id: DESTINATION, name: "Top shelf", type: "item" },
+        { id: SOURCE, name: "Cat carrier", type: "location" },
+      ],
+    });
+
+    expect(handoff.href).toBe(
+      `/location/${ROOT}?collectionId=${COLLECTION}&rootLocationId=${ROOT}&branchId=${BRANCH}&destinationId=${DESTINATION}&sourceItemId=${SOURCE}`
+    );
+    expect(handoff.context).toEqual({
+      collectionId: COLLECTION,
+      rootLocationId: ROOT,
+      branchId: BRANCH,
+      destinationId: DESTINATION,
+      sourceItemId: SOURCE,
+    });
+    expect(handoff.ancestors.find(ancestor => ancestor.id === NESTED)).toMatchObject({
+      kind: "item",
+      name: "Travel box",
+    });
+    expect(handoff.locationSegments.map(segment => segment.id)).toEqual([ROOT, BRANCH, DESTINATION]);
+    expect(handoff.href).not.toMatch(/return|redirect|next=/i);
+    expect(collectionIdToActivate()).toBeNull();
+  });
+
+  it("omits a branch when the item sits directly in the root location", () => {
+    const handoff = deriveItemLocationHandoff({
+      itemId: SOURCE,
+      collectionId: COLLECTION,
+      locationIds: new Set([ROOT]),
+      location: { id: ROOT, name: "Utility room" },
+      path: [
+        { id: ROOT, name: "Utility room", type: "location" },
+        { id: SOURCE, name: "Cat carrier", type: "location" },
+      ],
+    });
+
+    expect(handoff.href).toBe(
+      `/location/${ROOT}?collectionId=${COLLECTION}&rootLocationId=${ROOT}&destinationId=${ROOT}&sourceItemId=${SOURCE}`
+    );
+    expect(handoff.context.branchId).toBeUndefined();
+  });
+
+  it("derives a nested item from the nearest location ancestor, not its item parent", () => {
+    const handoff = deriveItemLocationHandoff({
+      itemId: SOURCE,
+      collectionId: COLLECTION,
+      locationIds: new Set([ROOT]),
+      location: { id: ROOT, name: "Utility room" },
+      parent: { id: NESTED, name: "Travel box", type: "location", parent: { id: ROOT, name: "Utility room" } },
+    });
+
+    expect(handoff.ancestors.find(ancestor => ancestor.id === NESTED)?.kind).toBe("item");
+    expect(handoff.context).toMatchObject({
+      rootLocationId: ROOT,
+      destinationId: ROOT,
+      sourceItemId: SOURCE,
+    });
+    expect(handoff.context.branchId).toBeUndefined();
+    expect(handoff.href?.startsWith(`/location/${ROOT}?`)).toBe(true);
+    expect(handoff.href).not.toContain(NESTED);
+  });
+
+  it("does not invent a location or a navigation target", () => {
+    const handoff = deriveItemLocationHandoff({
+      itemId: SOURCE,
+      collectionId: COLLECTION,
+      locationIds: locations,
+      path: [{ id: SOURCE, name: "Loose screw", type: "location" }],
+    });
+
+    expect(handoff.href).toBeNull();
+    expect(handoff.context).toEqual({});
+    expect(handoff.locationSegments).toEqual([]);
+    expect(handoff.ancestors).toEqual([]);
+  });
+
+  it("skips malformed ids and does not treat the source item as a location", () => {
+    const listedAsLocation = deriveItemLocationHandoff({
+      itemId: SOURCE,
+      collectionId: COLLECTION,
+      locationIds: new Set([ROOT, SOURCE]),
+      location: { id: SOURCE, name: "Itself" },
+      path: [
+        { id: "not-a-uuid", name: "Bad room", type: "location" },
+        { id: ROOT, name: "Utility room", type: "location" },
+        { id: SOURCE, name: "Cat carrier", type: "location" },
+      ],
+    });
+
+    expect(listedAsLocation.ancestors.map(ancestor => ancestor.id)).toEqual([ROOT]);
+    expect(listedAsLocation.href).toBe(
+      `/location/${ROOT}?collectionId=${COLLECTION}&rootLocationId=${ROOT}&destinationId=${ROOT}&sourceItemId=${SOURCE}`
+    );
+    expect(listedAsLocation.href).not.toContain(`destinationId=${SOURCE}`);
+
+    const malformedItem = deriveItemLocationHandoff({
+      itemId: "not-an-id",
+      collectionId: COLLECTION,
+      locationIds: new Set([ROOT]),
+      location: { id: ROOT, name: "Utility room" },
+      path: [
+        { id: ROOT, name: "Utility room", type: "location" },
+        { id: "not-an-id", name: "Loose screw", type: "location" },
+      ],
+    });
+    expect(malformedItem.href).toBeNull();
+    expect(malformedItem.context).toEqual({});
+    expect(malformedItem.locationSegments.map(segment => segment.id)).toEqual([ROOT]);
+  });
+
+  it("discards a handoff whose collection is not the selected collection", () => {
+    const handoff = deriveItemLocationHandoff({
+      itemId: SOURCE,
+      collectionId: OTHER,
+      currentCollectionId: COLLECTION,
+      locationIds: locations,
+      location: { id: DESTINATION, name: "Top shelf" },
+      path: [
+        { id: ROOT, name: "Utility room", type: "location" },
+        { id: DESTINATION, name: "Top shelf", type: "location" },
+        { id: SOURCE, name: "Cat carrier", type: "location" },
+      ],
+    });
+
+    expect(handoff.href).toBeNull();
+    expect(handoff.context).toEqual({});
+    expect(handoff.locationSegments.map(segment => segment.id)).toEqual([ROOT, DESTINATION]);
+    expect(collectionIdToActivate()).toBeNull();
+  });
+
+  it("drops an incompatible location hint without a replacement that keeps those ids", () => {
+    const href = `/location/${ROOT}?collectionId=${OTHER}&branchId=${BRANCH}&destinationId=${DESTINATION}&sourceItemId=${SOURCE}&q=kept`;
+    const discarded = discardIncompatibleInventoryContext(href, COLLECTION);
+
+    expect(discarded.context).toEqual({});
+    expect(discarded.replacementHref).toBe(`/location/${ROOT}?q=kept`);
+    expect(discarded.replacementHref).not.toContain(OTHER);
+    expect(discarded.replacementHref).not.toContain(SOURCE);
+
+    const kept = discardIncompatibleInventoryContext(
+      `/location/${ROOT}?collectionId=${COLLECTION}&rootLocationId=${ROOT}&sourceItemId=${SOURCE}`,
+      COLLECTION
+    );
+    expect(kept.replacementHref).toBeNull();
+    expect(kept.context.sourceItemId).toBe(SOURCE);
+    expect(kept.context.collectionId).toBe(COLLECTION);
   });
 });

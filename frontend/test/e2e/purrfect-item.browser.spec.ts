@@ -219,6 +219,11 @@ function installItemRoutes(page: Page) {
         await fulfillJson(route, id === CARRIER ? carrierState : minimal);
         return;
       }
+      if (method === "GET" && (id === ROOM || id === SUPPLIES || id === SHELF)) {
+        const name = id === ROOM ? "Utility room" : id === SUPPLIES ? "Pet supplies" : "Top shelf";
+        await fulfillJson(route, entity({ id, name }));
+        return;
+      }
       if (method === "PUT" && id === CARRIER) {
         const body = route.request().postDataJSON() as { name?: string };
         carrierState = { ...carrierState, name: body.name || carrierState.name };
@@ -273,10 +278,44 @@ test("purrfect desktop detail shows the real record and keeps actions reachable"
   await expect(page.getByTestId("item-breadcrumb")).toContainText("Pet supplies");
   await expect(page.getByTestId("item-breadcrumb")).toContainText("Top shelf");
   await expect(page.locator(`[data-crumb-id="${BOX}"]`)).toHaveAttribute("href", `/item/${BOX}`);
+  await expect(page.locator(`[data-crumb-id="${ROOM}"]`)).toHaveAttribute("href", `/location/${ROOM}`);
+  await expect(page.locator(`[data-crumb-id="${SUPPLIES}"]`)).toHaveAttribute("href", `/location/${SUPPLIES}`);
   await expect(page.locator(`[data-crumb-id="${SHELF}"]`)).toHaveAttribute("href", `/location/${SHELF}`);
   await expect(page.getByTestId("item-location")).toContainText("Utility room");
   await expect(page.getByTestId("item-location")).toContainText("Top shelf");
-  await expect(page.getByTestId("open-location")).toHaveAttribute("href", `/location/${SHELF}`);
+  await expect(page.getByTestId("item-location")).not.toContainText("Travel box");
+
+  const openLocation = page.getByTestId("open-location");
+  const openHref = await openLocation.getAttribute("href");
+  expect(openHref).toBeTruthy();
+  const openUrl = new URL(openHref ?? "", "http://homebox.local");
+  expect(openUrl.pathname).toBe(`/location/${ROOM}`);
+  expect(openUrl.searchParams.get("rootLocationId")).toBe(ROOM);
+  expect(openUrl.searchParams.get("branchId")).toBe(SUPPLIES);
+  expect(openUrl.searchParams.get("destinationId")).toBe(SHELF);
+  expect(openUrl.searchParams.get("sourceItemId")).toBe(CARRIER);
+  expect(openUrl.searchParams.get("collectionId")).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  );
+  expect(openHref).not.toMatch(/return|redirect|next=/i);
+
+  const mutations: string[] = [];
+  const onRequest = (request: { method: () => string; url: () => string }) => {
+    if (request.method() !== "GET" && request.url().includes("/api/")) {
+      mutations.push(`${request.method()} ${request.url()}`);
+    }
+  };
+  page.on("request", onRequest);
+  await openLocation.click();
+  await expect(page).toHaveURL(new RegExp(`/location/${ROOM}\\?`));
+  const landed = new URL(page.url());
+  expect(landed.searchParams.get("destinationId")).toBe(SHELF);
+  expect(landed.searchParams.get("sourceItemId")).toBe(CARRIER);
+  expect(landed.searchParams.get("branchId")).toBe(SUPPLIES);
+  expect(mutations).toEqual([]);
+  page.off("request", onRequest);
+  await page.goBack();
+  await expect(page.getByTestId("item-name")).toHaveText("Cat carrier");
   await expect(page.getByTestId("item-quantity")).toHaveText("1");
   await expect(page.getByTestId("item-price")).toContainText("68");
   await expect(page.getByTestId("item-insured")).toHaveText("No");
